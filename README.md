@@ -22,18 +22,26 @@ As is often the case, it grew into something more.
 
 ## 1. Overview
 
-VulnSight is a Python CLI tool for working with the Nessus Professional API. It supports triage, comparison, and reporting from the terminal without requiring direct work against raw API responses.
+VulnSight is a Python CLI for working directly with the Nessus Professional API. It is built for testers and analysts who need to triage findings, validate outcomes, compare scan runs, and produce usable outputs without working through raw API responses by hand.
 
-It is designed for internal, practitioner-focused use, with an emphasis on simplicity, speed, and predictable output.
+The tool is designed for internal, practitioner-led use. It is not trying to replace a full vulnerability management platform. The focus is a CLI-first workflow that is fast, explicit, and easy to use during assessment, review, and reporting.
+
+## Typical Workflow
+
+1. Select a scan
+2. Explore findings
+3. Validate findings (confirm / false positive)
+4. Compare with previous scans (diff)
+5. Export results (CSV or report)
 
 ## 2. Key Features
 
 - Scan selection and context management.
-- Findings exploration and filtering.
-- Detailed finding inspection.
-- Diffing between scan runs.
+- Findings exploration with severity, host, and validation-based filtering.
+- Detailed finding inspection with evidence, metadata, and recommendation output.
+- Diffing between scan runs, including new, resolved, and drift-aware changed findings.
 - Remediation-focused output with `--remediation`.
-- CSV export for data analysis.
+- CSV export for structured analysis and spreadsheet use.
 - Validation overlay with `Confirmed`, `False Positive`, and `Unreviewed`.
 - Markdown to DOCX/PDF reporting via Pandoc.
 
@@ -59,7 +67,7 @@ source env/bin/activate
 pip install -r requirements.txt
 ```
 
-VulnSight uses a local `.env` file for Nessus connection settings and API keys. If the tool is run without a valid `.env`, it will stop cleanly and advise the user to run `python .\main.py setup`.
+VulnSight uses a local `.env` file for Nessus connection settings and API keys. If the tool is run without a valid `.env`, it stops cleanly and advises the user to run `python .\main.py setup`.
 
 ## 4. Configuration
 
@@ -97,7 +105,7 @@ current
 history
 ```
 
-Use `scans` to list available scans, `scan <name>` to resolve a scan by name, and `use <scan_name>` to set the working scan. `use-history` selects a specific run for that scan. `current` and `history` show the active context and available run history.
+Use `scans` to list available scans, `scan <name>` to resolve a scan by name, and `use <scan_name>` to set the working scan. `use-history` selects a specific run for that scan. `current` and `history` show the active context and available scan runs.
 
 ### 5.2 Findings
 
@@ -140,7 +148,7 @@ validation
 validation --status confirmed
 ```
 
-`Unreviewed` is implicit when no validation record exists. Validation does not carry between runs.
+`Unreviewed` is implicit when no validation record exists. Validation is local to the workspace, applies per scan run, and does not carry between runs.
 
 ### 5.5 Reporting
 
@@ -151,6 +159,13 @@ report
 ```
 
 The reporting flow uses Markdown as the source format and converts it to DOCX or PDF. Output includes structured findings, evidence, recommendation content, and validation status.
+
+Validation-based subsets can also be generated when needed, for example:
+
+```bash
+report --exclude false-positives
+report --only confirmed
+```
 
 ### 5.6 CSV Export
 
@@ -168,7 +183,7 @@ CSV is written to stdout, so it can be redirected to a file:
 findings --format csv > findings.csv
 ```
 
-This provides structured data for Excel or other analysis workflows. Scan-level findings CSV includes `validation_status`.
+This is intended for Excel, pivot tables, and other analysis workflows. Scan-level findings CSV includes `validation_status`.
 
 ## 6. Design Principles
 
