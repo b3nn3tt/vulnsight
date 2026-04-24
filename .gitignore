@@ -1,0 +1,18 @@
+# Python bytecode and import caches
+__pycache__/
+
+# Local editor and workspace settings
+.obsidian/
+.vscode/
+
+# Local virtual environment
+env/
+
+# Local Nessus configuration
+.env
+
+# Local VulnSight runtime state
+# This refers to the hidden project-root ".vulnsight" directory used for
+# stored validation and scan-related JSON data, not the "vulnsight/" Python package.
+.vulnsight/
+.vulnsight_context.json

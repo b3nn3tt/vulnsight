@@ -1,0 +1,193 @@
+# VulnSight
+
+## Introduction
+
+This tool was built to fill a very specific gap in my workflow.
+
+As a user of Tenable’s Nessus Professional, I found that sharing findings beyond a manually written report was consistently slow and painful. Extracting useful data from scans, shaping it into something readable, and then tailoring it for different audiences turned me — the tester — into the bottleneck.
+
+The obvious answer is to move up to a more feature-rich platform like Tenable Vulnerability Management (formerly Tenable.io) or Tenable Security Center, where dashboards, user access, and remediation workflows are built in. But that comes with significant cost, and in practice, I often still end up walking stakeholders through findings anyway.
+
+For many use cases, a single Nessus Professional licence is perfectly sufficient — if you can get the data out efficiently.
+
+That’s where this tool comes in.
+
+Nessus exposes a comprehensive API, but in practice it is not especially intuitive to work with directly. I wanted a simple, fast way to interrogate scan data, pivot between views, and export findings in a clean, consistent format without constantly working with raw API responses.
+
+So I built a CLI.
+
+The original goal was straightforward: speed up triage and reporting.
+
+As is often the case, it grew into something more.
+
+## 1. Overview
+
+VulnSight is a Python CLI tool for working with the Nessus Professional API. It supports triage, comparison, and reporting from the terminal without requiring direct work against raw API responses.
+
+It is designed for internal, practitioner-focused use, with an emphasis on simplicity, speed, and predictable output.
+
+## 2. Key Features
+
+- Scan selection and context management.
+- Findings exploration and filtering.
+- Detailed finding inspection.
+- Diffing between scan runs.
+- Remediation-focused output with `--remediation`.
+- CSV export for data analysis.
+- Validation overlay with `Confirmed`, `False Positive`, and `Unreviewed`.
+- Markdown to DOCX/PDF reporting via Pandoc.
+
+## 3. Installation
+
+Clone the repository and create a Python virtual environment:
+
+```bash
+git clone <repo_url>
+cd vulnsight
+python -m venv env
+```
+
+Activate the environment and install dependencies:
+
+```bash
+# Windows
+.\env\Scripts\activate
+
+# Linux / macOS
+source env/bin/activate
+
+pip install -r requirements.txt
+```
+
+VulnSight uses a local `.env` file for Nessus connection settings and API keys. If the tool is run without a valid `.env`, it will stop cleanly and advise the user to run `python .\main.py setup`.
+
+## 4. Configuration
+
+Configuration is stored in a local `.env` file.
+
+You can create or update it by running:
+
+```bash
+python .\main.py setup
+```
+
+The setup flow collects the Nessus host details and API credentials, validates connectivity, and writes the required values to `.env`.
+
+Nessus API authentication uses `X-ApiKeys` values:
+- `ACCESS_KEY`
+- `SECRET_KEY`
+
+The Nessus URL is stored as:
+- `NESSUS_URL`
+
+The tool supports self-signed Nessus environments by running with `verify=False`.
+
+## 5. Usage
+
+### 5.1 Scan Context
+
+These commands manage the active scan and history context used by the rest of the CLI.
+
+```bash
+scans
+scan <name>
+use <scan_name>
+use-history <id|latest>
+current
+history
+```
+
+Use `scans` to list available scans, `scan <name>` to resolve a scan by name, and `use <scan_name>` to set the working scan. `use-history` selects a specific run for that scan. `current` and `history` show the active context and available run history.
+
+### 5.2 Findings
+
+These commands are used for scan-local finding review and filtering.
+
+```bash
+findings
+findings --min-severity high
+findings --host <ip>
+finding <id>
+```
+
+`findings` shows aggregated findings for the active scan run. Filters can be applied by severity, host, and validation state. `finding <id>` shows detailed information for a single plugin ID, including evidence and recommendation data.
+
+### 5.3 Diffing
+
+These commands compare two scan runs for the active scan.
+
+```bash
+diff
+diff --compare <id> --against <id>
+diff --plugin <id>
+```
+
+The default diff compares the current selected run to the immediately previous run. Output is grouped into new, resolved, and changed findings. Changed findings include severity drift, instance drift, and host drift.
+
+### 5.4 Validation
+
+Validation is a local overlay applied to findings in a specific scan run. It is tied to `scan_id + history_id + finding_id`.
+
+Supported states are:
+- `Confirmed`
+- `False Positive`
+- `Unreviewed`
+
+```bash
+validate <id> --status confirmed
+validate <id> --status false_positive
+validation
+validation --status confirmed
+```
+
+`Unreviewed` is implicit when no validation record exists. Validation does not carry between runs.
+
+### 5.5 Reporting
+
+Reports are generated from Markdown and converted with Pandoc.
+
+```bash
+report
+```
+
+The reporting flow uses Markdown as the source format and converts it to DOCX or PDF. Output includes structured findings, evidence, recommendation content, and validation status.
+
+### 5.6 CSV Export
+
+CSV output is available from existing command views.
+
+```bash
+findings --format csv
+global findings --format csv
+diff --format csv
+```
+
+CSV is written to stdout, so it can be redirected to a file:
+
+```bash
+findings --format csv > findings.csv
+```
+
+This provides structured data for Excel or other analysis workflows. Scan-level findings CSV includes `validation_status`.
+
+## 6. Design Principles
+
+- CLI-first workflow.
+- Minimal dependencies.
+- Separation of concerns between CLI logic, data extraction, rendering, and templates.
+- Validation as an overlay rather than mutation of source data.
+- Incremental development.
+
+## 7. Limitations
+
+- Requires Nessus Professional API access.
+- Output depends on the quality and completeness of the underlying scan data.
+- Validation is local only.
+- It is not a full vulnerability management platform.
+
+## 8. Future Work
+
+- Enhanced diff intelligence.
+- Improved reporting profiles.
+- Optional classification or prioritisation.
+- Further UX improvements.
