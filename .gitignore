@@ -18,3 +18,5 @@ env/
 # stored validation and scan-related JSON data, not the "vulnsight/" Python package.
 .vulnsight/
 .vulnsight_context.json
+AIRGAPPED_SETUP.txt
+vulnsight-env.tar.gz
