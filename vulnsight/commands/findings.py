@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import csv
 import sys
 
@@ -12,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from vulnsight.commands.finding import build_finding_data
+from vulnsight.commands.hosts import normalise_outputs
 from vulnsight.commands.remediation import clean_recommendation, has_recommendation
 from vulnsight.commands.scans import _build_client
 from vulnsight.context import load_context
@@ -173,7 +175,7 @@ def _get_plugin_hosts_from_host_details(
         except requests.RequestException:
             continue
 
-        outputs = host_plugin_details.get("outputs", [])
+        outputs = normalise_outputs(host_plugin_details.get("outputs"))
         output_hosts = _extract_hosts_from_outputs(outputs)
         if output_hosts:
             hosts.update(output_hosts)
@@ -199,7 +201,7 @@ def _get_plugin_hosts(
     """Return a sorted list of impacted hosts for a plugin."""
 
     details = client.get_plugin_details(scan_id, plugin_id, history_id)
-    hosts = _extract_hosts_from_outputs(details.get("outputs", []))
+    hosts = _extract_hosts_from_outputs(normalise_outputs(details.get("outputs")))
     if hosts:
         return hosts
 
@@ -346,6 +348,7 @@ def list_findings(
     exact_severity = _resolve_minimum_severity(severity) if severity else None
     minimum_severity = _resolve_minimum_severity(min_severity) if min_severity else None
     resolved_format = _validate_output_format(output_format)
+    show_progress = resolved_format != "csv"
     resolved_validation_status = _resolve_validation_filter(validation_status)
     resolved_exclude_validation_status = _resolve_validation_filter(exclude_validation_status)
 
@@ -370,8 +373,14 @@ def list_findings(
     history_id = int(context.get("history_id", 0))
     scan_name = str(context.get("scan_name", ""))
 
+    progress = (
+        console.status("Fetching scan findings from Nessus...", spinner="dots")
+        if show_progress
+        else nullcontext()
+    )
     try:
-        details = client.get_scan_result_details(scan_id, history_id)
+        with progress:
+            details = client.get_scan_result_details(scan_id, history_id)
     except requests.RequestException as exc:
         console.print(f"[red]Failed to retrieve scan findings:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -411,53 +420,95 @@ def list_findings(
         return
 
     rows: list[dict] = []
-    for finding in findings:
-        plugin_id = int(finding.get("plugin_id", 0) or 0)
-        severity_value = int(finding.get("severity", 0) or 0)
+    progress = (
+        console.status(
+            f"Processing {len(findings)} finding(s) from Nessus...",
+            spinner="dots",
+        )
+        if show_progress
+        else nullcontext()
+    )
+    with progress as status:
+        for index, finding in enumerate(findings, start=1):
+            plugin_id = int(finding.get("plugin_id", 0) or 0)
+            severity_value = int(finding.get("severity", 0) or 0)
+            finding_name = str(finding.get("plugin_name", "") or plugin_id)
 
-        if exact_severity is not None and severity_value != exact_severity:
-            continue
+            if show_progress:
+                status.update(
+                    f"Processing finding {index}/{len(findings)}: {finding_name}"
+                )
 
-        if minimum_severity is not None and severity_value < minimum_severity:
-            continue
-
-        try:
-            hosts = _get_plugin_hosts(client, scan_id, history_id, plugin_id, scan_hosts)
-        except requests.RequestException:
-            hosts = []
-
-        if host and host not in hosts:
-            continue
-
-        validation = get_validation(scan_id, history_id, plugin_id)
-        effective_validation_status = str(validation.get("status") or "unreviewed")
-        validation_display = get_validation_display(effective_validation_status)
-
-        if resolved_validation_status is not None and effective_validation_status != resolved_validation_status:
-            continue
-
-        if (
-            resolved_exclude_validation_status is not None
-            and effective_validation_status == resolved_exclude_validation_status
-        ):
-            continue
-
-        if exclude_false_positives and effective_validation_status == "false_positive":
-            continue
-
-        if remediation:
-            remediation_hosts, recommendation = _get_remediation_data(
-                client,
-                details,
-                scan_id,
-                history_id,
-                plugin_id,
-            )
-
-            if host and host not in remediation_hosts:
+            if exact_severity is not None and severity_value != exact_severity:
                 continue
 
-            if not has_recommendation(recommendation):
+            if minimum_severity is not None and severity_value < minimum_severity:
+                continue
+
+            try:
+                hosts = _get_plugin_hosts(
+                    client,
+                    scan_id,
+                    history_id,
+                    plugin_id,
+                    scan_hosts,
+                )
+            except requests.RequestException:
+                hosts = []
+
+            if host and host not in hosts:
+                continue
+
+            validation = get_validation(scan_id, history_id, plugin_id)
+            effective_validation_status = str(validation.get("status") or "unreviewed")
+            validation_display = get_validation_display(effective_validation_status)
+
+            if (
+                resolved_validation_status is not None
+                and effective_validation_status != resolved_validation_status
+            ):
+                continue
+
+            if (
+                resolved_exclude_validation_status is not None
+                and effective_validation_status == resolved_exclude_validation_status
+            ):
+                continue
+
+            if (
+                exclude_false_positives
+                and effective_validation_status == "false_positive"
+            ):
+                continue
+
+            if remediation:
+                remediation_hosts, recommendation = _get_remediation_data(
+                    client,
+                    details,
+                    scan_id,
+                    history_id,
+                    plugin_id,
+                )
+
+                if host and host not in remediation_hosts:
+                    continue
+
+                if not has_recommendation(recommendation):
+                    continue
+
+                rows.append(
+                    {
+                        "id": plugin_id,
+                        "name": str(finding.get("plugin_name", "")),
+                        "severity_value": severity_value,
+                        "severity": SEVERITY_LABELS.get(severity_value, "Unknown"),
+                        "count": int(finding.get("count", 0) or 0),
+                        "host_count": len(set(remediation_hosts)),
+                        "hosts": remediation_hosts,
+                        "recommendation": recommendation,
+                        "validation_status": validation_display,
+                    }
+                )
                 continue
 
             rows.append(
@@ -467,26 +518,11 @@ def list_findings(
                     "severity_value": severity_value,
                     "severity": SEVERITY_LABELS.get(severity_value, "Unknown"),
                     "count": int(finding.get("count", 0) or 0),
-                    "host_count": len(set(remediation_hosts)),
-                    "hosts": remediation_hosts,
-                    "recommendation": recommendation,
+                    "host_count": len(set(hosts)),
+                    "hosts": hosts,
                     "validation_status": validation_display,
                 }
             )
-            continue
-
-        rows.append(
-            {
-                "id": plugin_id,
-                "name": str(finding.get("plugin_name", "")),
-                "severity_value": severity_value,
-                "severity": SEVERITY_LABELS.get(severity_value, "Unknown"),
-                "count": int(finding.get("count", 0) or 0),
-                "host_count": len(set(hosts)),
-                "hosts": hosts,
-                "validation_status": validation_display,
-            }
-        )
 
     if resolved_format == "csv":
         csv_rows = [

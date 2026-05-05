@@ -10,6 +10,7 @@ import requests
 import typer
 from rich.console import Console
 
+from vulnsight.commands.hosts import normalise_outputs
 from vulnsight.commands.remediation import clean_recommendation
 from vulnsight.commands.scans import _build_client
 from vulnsight.context import load_context
@@ -506,7 +507,7 @@ def _collect_evidence_entries(
             continue
 
         vulnerability_context = _get_host_vulnerability_context(host_details, plugin_id)
-        host_outputs = host_plugin_details.get("outputs", [])
+        host_outputs = normalise_outputs(host_plugin_details.get("outputs"))
         host_entries = _extract_evidence_entries(host_outputs, fallback_host=host_name)
         for entry in host_entries:
             if not entry["service"]:
@@ -537,7 +538,9 @@ def _collect_evidence_entries(
     if evidence_entries:
         return sorted(hosts), evidence_entries
 
-    plugin_entries = _extract_evidence_entries(response.get("outputs", []))
+    plugin_entries = _extract_evidence_entries(
+        normalise_outputs(response.get("outputs"))
+    )
     for entry in plugin_entries:
         if entry["host"]:
             hosts.add(entry["host"])

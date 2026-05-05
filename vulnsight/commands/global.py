@@ -7,6 +7,7 @@ from collections.abc import Iterable
 import sys
 from typing import Any
 
+import click
 import requests
 import typer
 from rich import box
@@ -34,7 +35,22 @@ from vulnsight.validation import (
 
 
 console = Console()
-global_app = typer.Typer(help="Global cross-scan operations.")
+
+
+class AlphabeticalTyperGroup(typer.core.TyperGroup):
+    """Render help command lists alphabetically."""
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        """Return command names sorted for predictable help output."""
+
+        return sorted(self.commands)
+
+
+global_app = typer.Typer(
+    cls=AlphabeticalTyperGroup,
+    help="Cross-scan views using the latest completed run from each scan.",
+    no_args_is_help=True,
+)
 
 TOP_RISK_MODES = {"severity", "volume", "weighted"}
 SORT_DIRECTIONS = {"asc", "desc"}
@@ -883,26 +899,31 @@ def _print_global_evidence(matching_scans: list[dict[str, Any]]) -> None:
 @global_app.command("findings")
 def global_findings_command(
     severity: str | None = typer.Option(
-        None, "--severity", "-s", help="Only display this exact severity."
+        None,
+        "--severity",
+        "-s",
+        help="Only include one severity: info, low, medium, high, or critical.",
     ),
     min_severity: str | None = typer.Option(
-        None, "--min-severity", help="Minimum severity to include."
+        None,
+        "--min-severity",
+        help="Minimum severity: info, low, medium, high, or critical.",
     ),
     format: str = typer.Option(
         "table",
         "--format",
-        help="Output format: table or csv",
+        help="Output format: table or csv. CSV is written to stdout.",
     ),
     status: str | None = typer.Option(
         None,
         "--status",
         "--only",
-        help="Only include findings with this validation status.",
+        help="Only include validation status: confirmed, false_positive, or unreviewed.",
     ),
     exclude: str | None = typer.Option(
         None,
         "--exclude",
-        help="Exclude findings with this validation status.",
+        help="Exclude validation status: confirmed, false_positive, or unreviewed.",
     ),
 ) -> None:
     """Show aggregated findings across all scans."""
@@ -913,18 +934,20 @@ def global_findings_command(
 @global_app.command("summary")
 def global_summary_command(
     min_severity: str | None = typer.Option(
-        None, "--min-severity", help="Minimum severity to include."
+        None,
+        "--min-severity",
+        help="Minimum severity: info, low, medium, high, or critical.",
     ),
     top_risks: str | None = typer.Option(
         None,
         "--top-risks",
-        help="Top risks mode: severity, volume, or weighted. Weighted is the default recommended ranking mode.",
+        help="Top risks ranking mode: severity, volume, or weighted.",
     ),
     sort: str = typer.Option(
-        "desc", "--sort", help="Sort direction for Top Risks: asc or desc."
+        "desc", "--sort", help="Top risks sort direction: asc or desc."
     ),
     limit: int = typer.Option(
-        10, "--limit", help="Number of Top Risks rows to display."
+        10, "--limit", help="Maximum number of Top Risks rows to display."
     ),
 ) -> None:
     """Show a summary of findings across all scans."""
@@ -932,11 +955,13 @@ def global_summary_command(
     global_summary(min_severity, top_risks, sort, limit)
 
 
-@global_app.command("finding")
+@global_app.command("finding", no_args_is_help=True)
 def global_finding_command(
     plugin_id: int = typer.Argument(..., help="Plugin ID to inspect across all scans."),
     min_severity: str | None = typer.Option(
-        None, "--min-severity", help="Minimum severity to include."
+        None,
+        "--min-severity",
+        help="Minimum severity: info, low, medium, high, or critical.",
     ),
 ) -> None:
     """Show detailed information for a finding across all scans."""

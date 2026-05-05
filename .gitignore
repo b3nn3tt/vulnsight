@@ -7,6 +7,8 @@ __pycache__/
 
 # Local virtual environment
 env/
+.venv/
+.envrc
 
 # Local Nessus configuration
 .env

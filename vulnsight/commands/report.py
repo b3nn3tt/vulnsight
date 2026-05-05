@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime
 from pathlib import Path
 import platform
@@ -32,13 +33,24 @@ from vulnsight.validation import (
 
 
 console = Console()
-SUPPORTED_REPORT_FORMATS = {"docx", "pdf"}
+SUPPORTED_REPORT_FORMATS = {"docx", "csv"}
 REPORT_FORMAT_EXTENSIONS = {
     "docx": ".docx",
-    "pdf": ".pdf",
+    "csv": ".csv",
 }
 DEFAULT_REPORT_FORMAT = "docx"
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "templates" / "report.docx"
+CSV_TECHNICAL_DETAIL_COLUMNS = {
+    ("Risk Information", "CVSS v3.0"): "cvss_v3",
+    ("Risk Information", "CVSS v2.0"): "cvss_v2",
+    ("Vulnerability Information", "CPE"): "cpe",
+    ("Vulnerability Information", "Exploit Available"): "exploit_available",
+    ("Vulnerability Information", "Patch Publication Date"): "patch_publication_date",
+    (
+        "Vulnerability Information",
+        "Vulnerability Publication Date",
+    ): "vulnerability_publication_date",
+}
 
 SEVERITY_LABELS = {
     0: "Info",
@@ -125,14 +137,14 @@ def _convert_with_pandoc(
 
 
 def check_pandoc_available() -> None:
-    """Ensure Pandoc is available for DOCX and PDF export."""
+    """Ensure Pandoc is available for DOCX export."""
 
     if shutil.which("pandoc"):
         return
 
     system = platform.system()
     message = [
-        "Pandoc is required for DOCX/PDF export but was not found.",
+        "Pandoc is required for DOCX export but was not found.",
         "",
         "Install instructions:",
         "",
@@ -160,6 +172,137 @@ def check_pandoc_available() -> None:
 
     print("\n".join(message))
     sys.exit(1)
+
+
+def _join_csv_values(values: list[Any]) -> str:
+    """Join multiple values into one spreadsheet-friendly cell."""
+
+    return "\n".join(str(value).strip() for value in values if str(value).strip())
+
+
+def _extract_metadata_csv_columns(finding: dict[str, Any]) -> dict[str, str]:
+    """Return known technical metadata as dedicated CSV columns."""
+
+    columns = {column: "" for column in CSV_TECHNICAL_DETAIL_COLUMNS.values()}
+    remaining_rows: list[str] = []
+
+    for section_title, fields in finding.get("metadata_sections", []):
+        for label, value in fields:
+            text = str(value or "").strip()
+            if not text or text == "Not available.":
+                continue
+
+            column = CSV_TECHNICAL_DETAIL_COLUMNS.get((str(section_title), str(label)))
+            if column:
+                columns[column] = text
+                continue
+
+            remaining_rows.append(f"{section_title} - {label}: {text}")
+
+    columns["technical_details"] = _join_csv_values(remaining_rows)
+    return columns
+
+
+def _format_evidence_csv(finding: dict[str, Any]) -> str:
+    """Render finding evidence for a CSV cell."""
+
+    rows: list[str] = []
+    for index, entry in enumerate(finding.get("evidence", []), start=1):
+        parts = [f"Entry {index}"]
+        target = str(entry.get("target") or "").strip()
+        host = str(entry.get("host") or "").strip()
+        service = str(entry.get("service") or "").strip()
+        content = str(entry.get("content") or "").strip()
+
+        if target:
+            parts.append(f"Target: {target}")
+        elif host:
+            parts.append(f"Host: {host}")
+        if service:
+            parts.append(f"Service: {service}")
+        if content:
+            parts.append(content)
+
+        rows.append("\n".join(parts))
+
+    return _join_csv_values(rows)
+
+
+def _format_references_csv(finding: dict[str, Any]) -> str:
+    """Render references for a CSV cell."""
+
+    rows: list[str] = []
+    for section_title, references in finding.get("reference_sections", []):
+        for label, url in references:
+            rows.append(f"{section_title} - {label}: {url}")
+    return _join_csv_values(rows)
+
+
+def _write_report_csv(report: dict[str, Any], output_path: Path) -> None:
+    """Write a verbose report CSV export."""
+
+    headers = [
+        "scan_name",
+        "scan_id",
+        "history_id",
+        "scan_date",
+        "generated_at",
+        "hosts_included",
+        "hosts_excluded",
+        "severity_scope",
+        "finding_id",
+        "finding_name",
+        "severity",
+        "validation_status",
+        "host_count",
+        "affected_hosts",
+        "cves",
+        "cvss_v3",
+        "cvss_v2",
+        "cpe",
+        "exploit_available",
+        "patch_publication_date",
+        "vulnerability_publication_date",
+        "technical_details",
+        "description",
+        "solution",
+        "evidence",
+        "references",
+    ]
+
+    with output_path.open("w", encoding="utf-8", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=headers)
+        writer.writeheader()
+
+        for finding in report.get("findings", []):
+            metadata_columns = _extract_metadata_csv_columns(finding)
+            writer.writerow(
+                {
+                    "scan_name": report["scan"]["name"],
+                    "scan_id": report["scan"]["id"],
+                    "history_id": report["scan"]["history_id"],
+                    "scan_date": report["scan"]["scan_date"],
+                    "generated_at": report["scan"]["generated_at"],
+                    "hosts_included": report["scope"]["hosts_included"],
+                    "hosts_excluded": report["scope"]["hosts_excluded"],
+                    "severity_scope": report["scope"]["severity"],
+                    "finding_id": finding.get("id", ""),
+                    "finding_name": finding.get("name", ""),
+                    "severity": finding.get("severity", {}).get("label", "Unknown"),
+                    "validation_status": finding.get(
+                        "validation_status",
+                        "Unreviewed",
+                    ),
+                    "host_count": finding.get("host_count", 0),
+                    "affected_hosts": _join_csv_values(finding.get("hosts", [])),
+                    "cves": _join_csv_values(finding.get("cves", [])),
+                    **metadata_columns,
+                    "description": finding.get("description", ""),
+                    "solution": finding.get("solution", ""),
+                    "evidence": _format_evidence_csv(finding),
+                    "references": _format_references_csv(finding),
+                }
+            )
 
 
 def _get_base_host(value: str) -> str:
@@ -415,7 +558,8 @@ def generate_report(
     resolved_format = _normalise_report_format(output_format)
     if resolved_format not in SUPPORTED_REPORT_FORMATS:
         console.print(
-            f"Error: Unsupported format '{output_format}'. Supported formats: docx, pdf"
+            f"Error: Unsupported format '{output_format}'. "
+            f"Supported formats: {', '.join(sorted(SUPPORTED_REPORT_FORMATS))}"
         )
         return
 
@@ -462,13 +606,18 @@ def generate_report(
     if report is None:
         return
 
-    markdown = render_report_markdown(report)
     output_path = _resolve_output_path(
         output,
         str(scan_context.get("scan_name", "")),
         resolved_format,
     )
 
+    if resolved_format == "csv":
+        _write_report_csv(report, output_path)
+        console.print(f"[green]Report written:[/green] {output_path}")
+        return
+
+    markdown = render_report_markdown(report)
     check_pandoc_available()
 
     template_path: Path | None = None

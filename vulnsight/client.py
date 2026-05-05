@@ -20,6 +20,7 @@ class NessusClient:
         """Initialise the client with Nessus connection settings."""
 
         self.base_url = settings.base_url
+        self.timeout = settings.timeout
         self.session = requests.Session()
         self.session.verify = settings.verify_ssl
         self.session.headers.update(
@@ -34,7 +35,7 @@ class NessusClient:
     def _get(self, path: str) -> dict[str, Any]:
         """Perform a GET request and return the JSON payload."""
 
-        response = self.session.get(f"{self.base_url}{path}", timeout=30)
+        response = self.session.get(f"{self.base_url}{path}", timeout=self.timeout)
         response.raise_for_status()
         return response.json()
 

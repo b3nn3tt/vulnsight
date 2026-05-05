@@ -34,6 +34,10 @@ The tool is designed for internal, practitioner-led use. It is not trying to rep
 4. Compare with previous scans (diff)
 5. Export results (CSV or report)
 
+## Documentation
+
+Early user documentation lives in [docs/README.md](docs/README.md). It includes setup notes, scan context workflows, findings review, validation, diffing, reporting, global views, command reference, and troubleshooting.
+
 ## 2. Key Features
 
 - Scan selection and context management.
@@ -43,7 +47,7 @@ The tool is designed for internal, practitioner-led use. It is not trying to rep
 - Remediation-focused output with `--remediation`.
 - CSV export for structured analysis and spreadsheet use.
 - Validation overlay with `Confirmed`, `False Positive`, and `Unreviewed`.
-- Markdown to DOCX/PDF reporting via Pandoc.
+- Markdown to DOCX reporting via Pandoc.
 
 ## 3. Installation
 
@@ -52,22 +56,22 @@ Clone the repository and create a Python virtual environment:
 ```bash
 git clone <repo_url>
 cd vulnsight
-python -m venv env
+python3 -m venv .venv
 ```
 
 Activate the environment and install dependencies:
 
 ```bash
 # Windows
-.\env\Scripts\activate
+.\.venv\Scripts\activate
 
 # Linux / macOS
-source env/bin/activate
+source .venv/bin/activate
 
 pip install -r requirements.txt
 ```
 
-VulnSight uses a local `.env` file for Nessus connection settings and API keys. If the tool is run without a valid `.env`, it stops cleanly and advises the user to run `python .\main.py setup`.
+VulnSight uses a local `.env` file for Nessus connection settings and API keys. If the tool is run without a valid `.env`, it stops cleanly and advises the user to run `python3 main.py setup`.
 
 ## 4. Configuration
 
@@ -76,7 +80,7 @@ Configuration is stored in a local `.env` file.
 You can create or update it by running:
 
 ```bash
-python .\main.py setup
+python3 main.py setup
 ```
 
 The setup flow collects the Nessus host details and API credentials, validates connectivity, and writes the required values to `.env`.
@@ -88,6 +92,9 @@ Nessus API authentication uses `X-ApiKeys` values:
 The Nessus URL is stored as:
 - `NESSUS_URL`
 
+The API timeout defaults to 90 seconds and can be overridden with:
+- `NESSUS_TIMEOUT`
+
 The tool supports self-signed Nessus environments by running with `verify=False`.
 
 ## 5. Usage
@@ -98,14 +105,17 @@ These commands manage the active scan and history context used by the rest of th
 
 ```bash
 scans
+scans --details
 scan <name>
 use <scan_name>
+use --name <scan_name>
+use --id <scan_id>
 use-history <id|latest>
 current
 history
 ```
 
-Use `scans` to list available scans, `scan <name>` to resolve a scan by name, and `use <scan_name>` to set the working scan. `use-history` selects a specific run for that scan. `current` and `history` show the active context and available scan runs.
+Use `scans` to list available scans, `scans --details` to include slower per-scan run and credential checks, `scan <name>` to resolve a scan by name, and `use <scan_name>`, `use --name <scan_name>`, or `use --id <scan_id>` to set the working scan. `use-history` selects a specific run for that scan. `current` and `history` show the active context and available scan runs.
 
 ### 5.2 Findings
 
@@ -152,18 +162,19 @@ validation --status confirmed
 
 ### 5.5 Reporting
 
-Reports are generated from Markdown and converted with Pandoc.
+DOCX reports are generated from Markdown and converted with Pandoc. CSV reports are written directly from the report model.
 
 ```bash
 report
+report --format csv
 ```
 
-The reporting flow uses Markdown as the source format and converts it to DOCX or PDF. Output includes structured findings, evidence, recommendation content, and validation status.
+Output includes structured findings, evidence, recommendation content, and validation status.
 
 Validation-based subsets can also be generated when needed, for example:
 
 ```bash
-report --exclude false-positives
+report --exclude false_positive
 report --only confirmed
 ```
 
@@ -173,15 +184,18 @@ CSV output is available from existing command views.
 
 ```bash
 findings --format csv
+report --format csv
 global findings --format csv
 diff --format csv
 ```
 
-CSV is written to stdout, so it can be redirected to a file:
+Command-view CSV is written to stdout, so it can be redirected to a file:
 
 ```bash
 findings --format csv > findings.csv
 ```
+
+Report CSV is written to a timestamped `.csv` file by default, or to a path supplied with `--output`.
 
 This is intended for Excel, pivot tables, and other analysis workflows. Scan-level findings CSV includes `validation_status`.
 

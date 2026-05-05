@@ -50,7 +50,10 @@ def _run_api_probe(client: NessusClient) -> tuple[str, int | None, str]:
     """Perform a lightweight API probe and return status details."""
 
     try:
-        response = client.session.get(f"{client.base_url}/scans", timeout=30)
+        response = client.session.get(
+            f"{client.base_url}/scans",
+            timeout=client.timeout,
+        )
     except requests.RequestException as exc:
         return FAIL, None, str(exc)
 

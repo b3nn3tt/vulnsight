@@ -125,25 +125,50 @@ def _count_plugin_signals(vulnerabilities: list[dict[str, object]]) -> tuple[int
     return success_count, failure_count
 
 
-def _get_credential_status(client: NessusClient, scan_id: int) -> str:
+def _get_credential_status(
+    client: NessusClient,
+    scan_id: int,
+    scan_details: dict | None = None,
+) -> str:
     """Determine whether a scan was credentialed using auth-status findings."""
 
     try:
-        history = client.get_latest_completed_history(scan_id)
+        details = (
+            scan_details
+            if scan_details is not None
+            else client.get_scan_details(scan_id)
+        )
+        history_entries = details.get("history", [])
+        completed_runs = [
+            entry
+            for entry in history_entries
+            if str(entry.get("status", "")).lower() == "completed"
+        ]
     except ValueError:
         return "Unknown"
+
+    if not completed_runs:
+        return "Unknown"
+
+    history = max(
+        completed_runs,
+        key=lambda entry: (
+            int(entry.get("creation_date", 0) or 0),
+            int(entry.get("history_id", 0) or 0),
+        ),
+    )
 
     history_id = history.get("history_id")
     if history_id is None:
         return "Unknown"
 
-    details = client._get(f"/scans/{scan_id}?history_id={history_id}")
-    hosts = details.get("hosts", [])
+    result_details = client._get(f"/scans/{scan_id}?history_id={history_id}")
+    hosts = result_details.get("hosts", [])
     host_status = _get_host_credential_status(hosts)
     if host_status is not None:
         return host_status
 
-    vulnerabilities = details.get("vulnerabilities", [])
+    vulnerabilities = result_details.get("vulnerabilities", [])
     success_count, failure_count = _count_plugin_signals(vulnerabilities)
 
     if success_count > 0:
@@ -155,11 +180,55 @@ def _get_credential_status(client: NessusClient, scan_id: int) -> str:
     return "Unknown"
 
 
-def list_scans() -> None:
+def _add_basic_scan_row(table: Table, scan: dict) -> None:
+    """Append one row using only the lightweight scan-list payload."""
+
+    table.add_row(
+        str(scan.get("id", "")),
+        str(scan.get("name", "")),
+        _format_status(scan.get("status")),
+        _format_date(scan.get("last_modification_date")),
+    )
+
+
+def _add_detailed_scan_row(table: Table, client: NessusClient, scan: dict) -> None:
+    """Append one row enriched with per-scan details where available."""
+
+    scan_id = int(scan.get("id", 0))
+
+    try:
+        details = client.get_scan_details(scan_id)
+        history = details.get("history", [])
+        run_count = str(len(history))
+        credential_status = _get_credential_status(client, scan_id, details)
+    except requests.RequestException as exc:
+        run_count = "unavailable"
+        credential_status = "Unknown"
+        console.print(
+            f"[yellow]Warning:[/yellow] Could not retrieve details for scan "
+            f"{scan_id}: {exc}"
+        )
+
+    table.add_row(
+        str(scan_id),
+        str(scan.get("name", "")),
+        _format_status(scan.get("status")),
+        _format_date(scan.get("last_modification_date")),
+        run_count,
+        _format_credential_status(credential_status),
+    )
+
+
+def list_scans(include_details: bool = False) -> None:
     """List scans with summary details and run counts."""
 
     client = _build_client()
-    scans = client.list_scans()
+    try:
+        with console.status("Fetching scan list from Nessus...", spinner="dots"):
+            scans = client.list_scans()
+    except requests.RequestException as exc:
+        console.print(f"[red]Failed to retrieve scans:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     if not scans:
         console.print("[yellow]No scans found.[/yellow]")
@@ -170,24 +239,24 @@ def list_scans() -> None:
     table.add_column("Name", style="white")
     table.add_column("Status", no_wrap=True)
     table.add_column("Last Modified", no_wrap=True)
-    table.add_column("Runs", justify="right", no_wrap=True)
-    table.add_column("Creds", no_wrap=True)
 
-    for scan in scans:
-        scan_id = int(scan.get("id", 0))
-        details = client.get_scan_details(scan_id)
-        history = details.get("history", [])
-        run_count = len(history)
-        credential_status = _get_credential_status(client, scan_id)
+    if include_details:
+        table.add_column("Runs", justify="right", no_wrap=True)
+        table.add_column("Creds", no_wrap=True)
 
-        table.add_row(
-            str(scan_id),
-            str(scan.get("name", "")),
-            _format_status(scan.get("status")),
-            _format_date(scan.get("last_modification_date")),
-            str(run_count),
-            _format_credential_status(credential_status),
-        )
+    if include_details:
+        with console.status(
+            "Fetching per-scan details from Nessus...",
+            spinner="dots",
+        ) as status:
+            for scan in scans:
+                scan_id = int(scan.get("id", 0))
+                scan_name = str(scan.get("name", "") or scan_id)
+                status.update(f"Fetching details for {scan_name} ({scan_id})...")
+                _add_detailed_scan_row(table, client, scan)
+    else:
+        for scan in scans:
+            _add_basic_scan_row(table, scan)
 
     console.print(table)
 

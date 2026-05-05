@@ -19,6 +19,15 @@ console = Console()
 OS_IDENTIFICATION_PLUGIN_ID = 11936
 
 
+def normalise_outputs(value: object) -> list[dict]:
+    """Return Nessus plugin output rows as a safe list."""
+
+    if not isinstance(value, list):
+        return []
+
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _extract_os_from_text(text: str) -> str:
     """Extract a readable operating system string from plugin output."""
 
@@ -60,7 +69,7 @@ def _get_host_os(client, scan_id: int, history_id: int, host: dict) -> str:
     except requests.RequestException:
         return "Unknown"
 
-    outputs = plugin_output.get("outputs", [])
+    outputs = normalise_outputs(plugin_output.get("outputs"))
     for output in outputs:
         text = str(output.get("plugin_output") or "").strip()
         if not text:

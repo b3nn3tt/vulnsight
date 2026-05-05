@@ -11,6 +11,7 @@ from dotenv import load_dotenv, set_key
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_NESSUS_URL = "https://10.54.29.242:8834"
+DEFAULT_NESSUS_TIMEOUT = 90
 
 
 def reload_env() -> None:
@@ -29,7 +30,26 @@ class Settings:
     base_url: str
     access_key: str
     secret_key: str
+    timeout: int = DEFAULT_NESSUS_TIMEOUT
     verify_ssl: bool = False
+
+
+def _get_timeout() -> int:
+    """Return the configured Nessus API timeout in seconds."""
+
+    raw_value = os.getenv("NESSUS_TIMEOUT", "").strip()
+    if not raw_value:
+        return DEFAULT_NESSUS_TIMEOUT
+
+    try:
+        timeout = int(raw_value)
+    except ValueError:
+        return DEFAULT_NESSUS_TIMEOUT
+
+    if timeout < 1:
+        return DEFAULT_NESSUS_TIMEOUT
+
+    return timeout
 
 
 def get_settings() -> Settings:
@@ -40,6 +60,7 @@ def get_settings() -> Settings:
         base_url=os.getenv("NESSUS_URL", DEFAULT_NESSUS_URL).rstrip("/"),
         access_key=os.getenv("ACCESS_KEY", "").strip(),
         secret_key=os.getenv("SECRET_KEY", "").strip(),
+        timeout=_get_timeout(),
         verify_ssl=False,
     )
 
