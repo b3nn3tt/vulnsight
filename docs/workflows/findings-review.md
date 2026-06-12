@@ -14,8 +14,15 @@ Useful filters:
 python3 main.py findings --min-severity high
 python3 main.py findings --severity critical
 python3 main.py findings --host 10.0.0.5
+python3 main.py findings --only confirmed
+python3 main.py findings --exclude false_positive
 python3 main.py findings --exclude-false-positives
 ```
+
+Filter by validation status with `--only <status>` (show only that status) or
+`--exclude <status>`; `--exclude-false-positives` is a shortcut for
+`--exclude false_positive`. These same filter flags work on `report` and the `global`
+commands.
 
 Severity values are:
 

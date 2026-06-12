@@ -20,6 +20,7 @@ OPTION_VALUE_HINTS = {
     "--severity": "info, low, medium, high, critical",
     "-s": "info, low, medium, high, critical",
     "--min-severity": "info, low, medium, high, critical",
+    "--status": "confirmed, false_positive, unreviewed",
     "--validation": "confirmed, false_positive, unreviewed",
     "--only": "confirmed, false_positive, unreviewed",
     "--exclude": "confirmed, false_positive, unreviewed",

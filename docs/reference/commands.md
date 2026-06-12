@@ -9,7 +9,7 @@ Run `python3 main.py --help` for the current command list. Run any command with 
 - `doctor`: check configuration, connectivity, Pandoc, and local state
 - `finding`: inspect one finding in the active scan run
 - `findings`: list aggregated findings in the active scan run
-- `global`: cross-scan views using latest completed runs
+- `global`: cross-scan views using the latest usable run from each scan
 - `history`: list available runs for the active scan
 - `hosts`: list hosts and best-effort operating systems
 - `ping`: test basic Nessus connectivity
@@ -30,9 +30,11 @@ Run `python3 main.py --help` for the current command list. Run any command with 
 python3 main.py global findings
 python3 main.py global summary
 python3 main.py global finding <plugin_id>
+python3 main.py global report
 ```
 
-Global commands use the latest completed run from each visible scan.
+Global commands use the latest usable run (completed or imported) from each visible
+scan. Add `--folder "<name>"` to scope any global command to a single Nessus folder.
 
 ## Common Values
 
@@ -49,6 +51,10 @@ Validation:
 - `confirmed`
 - `false_positive`
 - `unreviewed`
+
+Set a finding's state with `validate <id> --status <state>`. Filter any view (`findings`,
+`report`, `validation`, and the `global` forms) with `--only <state>` or
+`--exclude <state>`.
 
 Formats:
 

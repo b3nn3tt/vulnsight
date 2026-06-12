@@ -170,13 +170,19 @@ def validate_command(
 def validation_command(
     status: str | None = typer.Option(
         None,
+        "--only",
+        help="Only show this validation status: confirmed, false_positive, or unreviewed.",
+    ),
+    status_alias: str | None = typer.Option(
+        None,
         "--status",
-        help="Filter by validation status: confirmed, false_positive, or unreviewed.",
+        hidden=True,
+        help="Deprecated alias for --only.",
     ),
 ) -> None:
     """Show validation state for findings in the current scan run."""
 
-    show_validation(status)
+    show_validation(status if status is not None else status_alias)
 
 
 @app.command()
@@ -280,9 +286,14 @@ def findings(
     ),
     validation: str | None = typer.Option(
         None,
-        "--validation",
         "--only",
         help="Only include validation status: confirmed, false_positive, or unreviewed.",
+    ),
+    validation_alias: str | None = typer.Option(
+        None,
+        "--validation",
+        hidden=True,
+        help="Deprecated alias for --only.",
     ),
     exclude_validation: str | None = typer.Option(
         None,
@@ -331,7 +342,7 @@ def findings(
         min_severity,
         recommendations,
         format,
-        validation,
+        validation if validation is not None else validation_alias,
         exclude_validation,
         exclude_false_positives,
     )

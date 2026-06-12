@@ -1182,9 +1182,14 @@ def global_findings_command(
     ),
     status: str | None = typer.Option(
         None,
-        "--status",
         "--only",
         help="Only include validation status: confirmed, false_positive, or unreviewed.",
+    ),
+    status_alias: str | None = typer.Option(
+        None,
+        "--status",
+        hidden=True,
+        help="Deprecated alias for --only.",
     ),
     exclude: str | None = typer.Option(
         None,
@@ -1199,7 +1204,14 @@ def global_findings_command(
 ) -> None:
     """Show aggregated findings across all scans."""
 
-    global_findings(severity, min_severity, format, status, exclude, folder)
+    global_findings(
+        severity,
+        min_severity,
+        format,
+        status if status is not None else status_alias,
+        exclude,
+        folder,
+    )
 
 
 @global_app.command("summary")
