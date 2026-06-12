@@ -41,10 +41,20 @@ If one scan is much slower than others, check the scan in the Nessus UI. A corru
 
 ## Pandoc Issues
 
-DOCX reports require Pandoc:
+DOCX reports require Pandoc. If a report fails during conversion, first confirm Pandoc runs on its own:
 
 ```bash
+pandoc --version
+```
+
+If that errors, the problem is the Pandoc install, not VulnSight. A common cause on Windows is a broken or "shimmed" install from a package manager (the error mentions a `.NET` / shim failure). Reinstall Pandoc as a native binary:
+
+```bash
+# Linux
 sudo apt install pandoc
+
+# Windows
+winget install --id JohnMacFarlane.Pandoc
 ```
 
 CSV reports do not require Pandoc:
@@ -52,6 +62,10 @@ CSV reports do not require Pandoc:
 ```bash
 python3 main.py report --format csv
 ```
+
+## Shared Validation Storage
+
+If `VULNSIGHT_VALIDATION_DIR` points at a shared location that is offline, commands that read or write validation (`findings`, `report`, `validation`, and the `global` forms) stop with a clear error rather than silently falling back to local storage. Reconnect the share, or run `setup` to switch back to local storage. Commands that do not use validation (`scans`, `use`, `summary`, etc.) are unaffected.
 
 ## CSV Redirects
 

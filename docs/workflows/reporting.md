@@ -61,3 +61,12 @@ python3 main.py report --preset high-risk
 ```
 
 Presets supply default filters and output options where the user has not already provided a value.
+
+## Estate Reports
+
+`report` covers the active scan. To produce one aggregated report across every scan, or across a whole Nessus folder, use `global report` (see [Global Views](global-views.md)):
+
+```bash
+python3 main.py global report --format docx
+python3 main.py global report --folder "Production" --format docx
+```

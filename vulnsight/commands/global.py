@@ -65,7 +65,7 @@ class AlphabeticalTyperGroup(typer.core.TyperGroup):
 
 global_app = typer.Typer(
     cls=AlphabeticalTyperGroup,
-    help="Cross-scan views using the latest completed run from each scan.",
+    help="Cross-scan views using the latest usable run from each scan.",
     no_args_is_help=True,
 )
 

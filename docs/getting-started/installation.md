@@ -34,7 +34,20 @@ If the command loads help, the Python environment is ready.
 DOCX reporting requires Pandoc:
 
 ```bash
+# Linux
 sudo apt install pandoc
+
+# Windows
+winget install --id JohnMacFarlane.Pandoc
 ```
 
 CSV exports do not require Pandoc.
+
+## Development (optional)
+
+To run the test suite, install the development dependencies (runtime plus `pytest`):
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest
+```

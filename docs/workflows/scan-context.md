@@ -22,6 +22,12 @@ python3 main.py scans --details
 
 `--details` fetches slower per-scan run counts and credential status.
 
+The scan list includes a **Folder** column. Limit it to a single Nessus folder with `--folder` (matched case-insensitively):
+
+```bash
+python3 main.py scans --folder "Production"
+```
+
 ## Resolve a Scan Name
 
 ```bash
@@ -45,7 +51,7 @@ python3 main.py use --name "WEYLAND AUTH"
 python3 main.py use --id 9
 ```
 
-The latest completed run is selected automatically.
+The latest usable run is selected automatically. Imported scans (uploaded `.nessus` files) are supported alongside live scans.
 
 ## Select a History Run
 

@@ -1,11 +1,21 @@
 # Global Views
 
-Global commands look across all visible scans and use the latest completed run from each scan. They are useful when you want a portfolio-style view rather than the currently selected scan context.
+Global commands look across all visible scans and use the latest usable run (completed or imported) from each scan. They are useful when you want a portfolio-style view rather than the currently selected scan context.
 
 Run global help with:
 
 ```bash
 python3 main.py global --help
+```
+
+## Folder Scope
+
+Any global command can be limited to a single Nessus folder with `--folder` (matched case-insensitively):
+
+```bash
+python3 main.py global summary --folder "Production"
+python3 main.py global findings --folder "Production"
+python3 main.py global report --folder "Production"
 ```
 
 ## Summary
@@ -14,7 +24,7 @@ python3 main.py global --help
 python3 main.py global summary
 ```
 
-The summary shows how many scans are available, how many latest completed runs were included, and severity counts across the aggregated findings.
+The summary shows how many scans are available, how many latest usable runs were included, and severity counts across the aggregated findings.
 
 Useful filters and ranking options:
 
@@ -37,7 +47,7 @@ Top risk modes are:
 python3 main.py global findings
 ```
 
-This groups findings by plugin ID across all latest completed scan runs.
+This groups findings by plugin ID across all latest usable scan runs.
 
 Useful filters:
 
@@ -60,13 +70,25 @@ python3 main.py global findings --format csv > global-findings.csv
 python3 main.py global finding 19506
 ```
 
-This shows where a plugin appears across all latest completed scan runs, including affected scans, hosts, validation status, description, solution, and available evidence.
+This shows where a plugin appears across all latest usable scan runs, including affected scans, hosts, validation status, description, solution, and available evidence.
 
 You can combine it with a minimum severity filter:
 
 ```bash
 python3 main.py global finding 19506 --min-severity high
 ```
+
+## Estate Report
+
+Generate one aggregated report across every scan, or across a single folder:
+
+```bash
+python3 main.py global report --format docx
+python3 main.py global report --folder "Production" --format docx
+python3 main.py global report --format csv
+```
+
+Findings are aggregated by plugin across all included scans, with a per-scan breakdown appendix. The same `--min-severity`, `--severity`, `--only`, `--exclude`, and `--scan` filters apply, and `--toc` adds a table of contents to DOCX output.
 
 ## Notes
 
