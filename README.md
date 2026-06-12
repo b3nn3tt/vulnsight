@@ -29,13 +29,16 @@ The tool is designed for internal, practitioner-led use. It is not trying to rep
 ## Key Features
 
 - Scan selection and context management.
+- Support for live scans and imported `.nessus` results.
 - Findings exploration with severity, host, and validation-based filtering.
 - Detailed finding inspection with evidence, metadata, and recommendation output.
+- Cross-scan "global" views: aggregated findings, summaries, and top-risk ranking.
+- Folder-aware scoping with `--folder` on the scan list and every global view.
 - Diffing between scan runs, including new, resolved, and drift-aware changed findings.
 - Remediation-focused output with `--remediation`.
 - CSV export for structured analysis and spreadsheet use.
 - Validation overlay with `Confirmed`, `False Positive`, and `Unreviewed`.
-- Markdown to DOCX reporting via Pandoc.
+- Markdown to DOCX reporting via Pandoc, including a converged whole-estate report.
 
 ## Quick Start
 
@@ -75,6 +78,18 @@ python3 main.py finding <plugin_id>
 python3 main.py report
 ```
 
+Work across every scan at once with the `global` commands, and scope any view to a
+Nessus folder with `--folder`:
+
+```bash
+python3 main.py global findings
+python3 main.py global summary --top-risks weighted
+python3 main.py global report --format docx
+
+python3 main.py scans --folder "Production"
+python3 main.py global report --folder "Production" --format docx
+```
+
 Use the built-in help for command-specific options:
 
 ```bash
@@ -92,6 +107,18 @@ DOCX reporting requires Pandoc. CSV exports do not require Pandoc.
 - Separation of concerns between CLI logic, data extraction, rendering, and templates.
 - Validation as an overlay rather than mutation of source data.
 - Incremental development.
+
+## Development
+
+Install the development dependencies (runtime plus `pytest`) and run the test suite:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+The tests cover the pure logic — aggregation, scope labels, folder and run-status
+filtering, and the validation overlay — and run without a live Nessus instance.
 
 ## Limitations
 
