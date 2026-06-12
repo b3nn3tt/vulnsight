@@ -180,18 +180,61 @@ def _get_credential_status(
     return "Unknown"
 
 
-def _add_basic_scan_row(table: Table, scan: dict) -> None:
+def _build_folder_map(client: NessusClient) -> dict[int, str]:
+    """Return a mapping of folder ID to folder name.
+
+    Degrades to an empty map (folders shown as '-') if the folders endpoint
+    cannot be reached, rather than failing the whole listing.
+    """
+
+    try:
+        folders = client.list_folders()
+    except requests.RequestException as exc:
+        console.print(
+            f"[yellow]Warning:[/yellow] Could not retrieve folders: {exc}"
+        )
+        return {}
+
+    return {
+        int(folder.get("id", 0) or 0): str(folder.get("name", "") or "")
+        for folder in folders
+    }
+
+
+def _resolve_folder_name(folder_map: dict[int, str], scan: dict) -> str:
+    """Return the folder name for a scan, or '-' when unknown."""
+
+    folder_id = scan.get("folder_id")
+    if folder_id is None:
+        return "-"
+    return folder_map.get(int(folder_id), "-") or "-"
+
+
+def _resolve_folder_filter(folder_map: dict[int, str], folder: str) -> int | None:
+    """Resolve a folder name to its ID (case-insensitive), or None if absent."""
+
+    target = folder.strip().lower()
+    for folder_id, name in folder_map.items():
+        if name.strip().lower() == target:
+            return folder_id
+    return None
+
+
+def _add_basic_scan_row(table: Table, scan: dict, folder_name: str) -> None:
     """Append one row using only the lightweight scan-list payload."""
 
     table.add_row(
         str(scan.get("id", "")),
         str(scan.get("name", "")),
+        folder_name,
         _format_status(scan.get("status")),
         _format_date(scan.get("last_modification_date")),
     )
 
 
-def _add_detailed_scan_row(table: Table, client: NessusClient, scan: dict) -> None:
+def _add_detailed_scan_row(
+    table: Table, client: NessusClient, scan: dict, folder_name: str
+) -> None:
     """Append one row enriched with per-scan details where available."""
 
     scan_id = int(scan.get("id", 0))
@@ -212,6 +255,7 @@ def _add_detailed_scan_row(table: Table, client: NessusClient, scan: dict) -> No
     table.add_row(
         str(scan_id),
         str(scan.get("name", "")),
+        folder_name,
         _format_status(scan.get("status")),
         _format_date(scan.get("last_modification_date")),
         run_count,
@@ -219,7 +263,7 @@ def _add_detailed_scan_row(table: Table, client: NessusClient, scan: dict) -> No
     )
 
 
-def list_scans(include_details: bool = False) -> None:
+def list_scans(include_details: bool = False, folder: str | None = None) -> None:
     """List scans with summary details and run counts."""
 
     client = _build_client()
@@ -234,9 +278,35 @@ def list_scans(include_details: bool = False) -> None:
         console.print("[yellow]No scans found.[/yellow]")
         return
 
+    folder_map = _build_folder_map(client)
+
+    if folder is not None:
+        folder_id = _resolve_folder_filter(folder_map, folder)
+        if folder_id is None:
+            console.print(f"[red]Folder not found:[/red] {folder}")
+            if folder_map:
+                available = ", ".join(
+                    sorted(name for name in folder_map.values() if name)
+                )
+                console.print(f"Available folders: {available}")
+            raise typer.Exit(code=1)
+
+        scans = [
+            scan
+            for scan in scans
+            if scan.get("folder_id") is not None
+            and int(scan.get("folder_id")) == folder_id
+        ]
+        if not scans:
+            console.print(
+                f"[yellow]No scans found in folder '{folder_map[folder_id]}'.[/yellow]"
+            )
+            return
+
     table = Table(title="Nessus Scans", box=box.ROUNDED)
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("Name", style="white")
+    table.add_column("Folder", style="white", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Last Modified", no_wrap=True)
 
@@ -253,10 +323,12 @@ def list_scans(include_details: bool = False) -> None:
                 scan_id = int(scan.get("id", 0))
                 scan_name = str(scan.get("name", "") or scan_id)
                 status.update(f"Fetching details for {scan_name} ({scan_id})...")
-                _add_detailed_scan_row(table, client, scan)
+                _add_detailed_scan_row(
+                    table, client, scan, _resolve_folder_name(folder_map, scan)
+                )
     else:
         for scan in scans:
-            _add_basic_scan_row(table, scan)
+            _add_basic_scan_row(table, scan, _resolve_folder_name(folder_map, scan))
 
     console.print(table)
 

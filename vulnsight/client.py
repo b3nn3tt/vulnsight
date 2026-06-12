@@ -45,6 +45,12 @@ class NessusClient:
         payload = self._get("/scans")
         return payload.get("scans", [])
 
+    def list_folders(self) -> list[dict[str, Any]]:
+        """Return the list of scan folders from Nessus."""
+
+        payload = self._get("/folders")
+        return payload.get("folders", [])
+
     def get_scan_details(self, scan_id: int) -> dict[str, Any]:
         """Return the full details for a specific scan."""
 

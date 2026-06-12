@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Any
 
 from vulnsight.formatters.finding import clean_evidence_output, parse_target
@@ -130,24 +131,10 @@ def _build_report_finding_header(
     ]
 
 
-def _render_report_finding_markdown(finding: dict[str, Any], index: int) -> str:
-    """Render a finding for report output with report-specific formatting."""
+def _render_finding_body(finding: dict[str, Any]) -> list[str]:
+    """Render the shared finding body (details, description, evidence, references)."""
 
-    affected_hosts = finding.get("hosts", [])
-    affected_hosts_text = ", ".join(affected_hosts) if affected_hosts else "None listed"
-    severity_label = str(finding.get("severity", {}).get("label") or "Unknown").upper()
-    finding_name = str(finding.get("name", "Not available."))
-    finding_id = int(finding.get("id", 0) or 0)
-    validation_status = str(finding.get("validation_status") or "Unreviewed")
-
-    lines = _build_report_finding_header(
-        finding_name,
-        finding_id,
-        severity_label,
-        affected_hosts_text,
-        validation_status,
-        index,
-    )
+    lines: list[str] = []
 
     technical_details = _build_technical_details(finding)
     if technical_details:
@@ -181,6 +168,30 @@ def _render_report_finding_markdown(finding: dict[str, Any], index: int) -> str:
     for title, references in finding.get("reference_sections", []):
         lines.extend(["", f"#### {title}"])
         lines.extend(f"- {label}: {url}" for label, url in references)
+
+    return lines
+
+
+def _render_report_finding_markdown(finding: dict[str, Any], index: int) -> str:
+    """Render a finding for report output with report-specific formatting."""
+
+    affected_hosts = finding.get("hosts", [])
+    affected_hosts_text = ", ".join(affected_hosts) if affected_hosts else "None listed"
+    severity_label = str(finding.get("severity", {}).get("label") or "Unknown").upper()
+    finding_name = str(finding.get("name", "Not available."))
+    finding_id = int(finding.get("id", 0) or 0)
+    validation_status = str(finding.get("validation_status") or "Unreviewed")
+
+    lines = _build_report_finding_header(
+        finding_name,
+        finding_id,
+        severity_label,
+        affected_hosts_text,
+        validation_status,
+        index,
+    )
+
+    lines.extend(_render_finding_body(finding))
 
     return "\n".join(lines)
 
@@ -281,6 +292,10 @@ def _render_report_evidence_entry(entry: dict[str, Any], entry_index: int) -> li
 
     lines = ["", f"##### Entry {entry_index}", ""]
 
+    scan = str(entry.get("scan") or "").strip()
+    if scan:
+        lines.append(f"**Scan:** {scan}  ")
+
     target = str(entry.get("target") or "")
     host, port, service = parse_target(target)
     if not host:
@@ -306,7 +321,7 @@ def _render_report_evidence_entry(entry: dict[str, Any], entry_index: int) -> li
     if not evidence_content and target and not (host or service_label):
         evidence_content = f"Target: {target}"
 
-    if host or service_label:
+    if scan or host or service_label:
         lines.append("")
 
     lines.extend(
@@ -389,3 +404,150 @@ def render_report_markdown(report: dict[str, Any]) -> str:
         finding_index += 1
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+SEVERITY_APPENDIX_LABELS = {
+    4: "Critical",
+    3: "High",
+    2: "Medium",
+    1: "Low",
+    0: "Info",
+}
+
+
+def _build_global_report_finding_header(
+    name: str,
+    finding_id: int,
+    severity_label: str,
+    affected_scans_text: str,
+    scan_count: int,
+    validation_summary: str,
+    affected_hosts_text: str,
+    host_count: int,
+    index: int,
+) -> list[str]:
+    """Build the estate report finding heading and header table."""
+
+    return [
+        f"### {index}. {name}",
+        "",
+        "|  |  |",
+        "| --- | --- |",
+        f"| ID | {finding_id} |",
+        f"| Severity | **{severity_label}** |",
+        f"| Affected Scans ({scan_count}) | {_escape_markdown_table(affected_scans_text)} |",
+        f"| Validation | {_escape_markdown_table(validation_summary)} |",
+        f"| Affected Hosts ({host_count}) | {_escape_markdown_table(affected_hosts_text)} |",
+        "",
+    ]
+
+
+def _render_global_report_finding_markdown(finding: dict[str, Any], index: int) -> str:
+    """Render an aggregated estate finding for report output."""
+
+    scans = finding.get("scan_names", [])
+    affected_scans_text = ", ".join(scans) if scans else "None"
+    affected_hosts = finding.get("hosts", [])
+    affected_hosts_text = ", ".join(affected_hosts) if affected_hosts else "None listed"
+    severity_label = str(finding.get("severity", {}).get("label") or "Unknown").upper()
+    finding_name = str(finding.get("name", "Not available."))
+    finding_id = int(finding.get("id", 0) or 0)
+    validation_summary = str(finding.get("validation_summary") or "Unreviewed")
+
+    lines = _build_global_report_finding_header(
+        finding_name,
+        finding_id,
+        severity_label,
+        affected_scans_text,
+        len(scans),
+        validation_summary,
+        affected_hosts_text,
+        int(finding.get("host_count", len(affected_hosts)) or 0),
+        index,
+    )
+
+    lines.extend(_render_finding_body(finding))
+
+    return "\n".join(lines)
+
+
+def iter_global_report_markdown(report: dict[str, Any]) -> Iterator[str]:
+    """Yield the aggregated whole-estate report as Markdown chunks.
+
+    Streaming the report one section at a time avoids holding the entire
+    rendered document in memory at once, which keeps the peak footprint down
+    for large estates with high-instance informational findings.
+    """
+
+    estate = report["estate"]
+    executive_summary = _build_executive_summary(report)
+    header_lines: list[str] = [
+        PAGE_BREAK_BLOCK,
+        "",
+        "## Estate Details",
+        "",
+        f"**Scans Included:** {estate['scans_included']} of {estate['scans_available']}  ",
+        f"**Hosts:** {estate['host_total']}  ",
+        f"**Findings:** {len(report['findings'])}  ",
+        f"**Generated:** {estate['generated_at']}  ",
+        "",
+        "## Scope",
+        "",
+        f"- Folder: {report['scope'].get('folder', 'All')}",
+        f"- Scans: {report['scope']['scans']}",
+        f"- Severity: {_format_severity_scope(report['scope']['severity'])}",
+        f"- Validation: {report['scope']['validation']}",
+        "",
+        "## Executive Summary",
+        "",
+        *executive_summary,
+        "",
+        PAGE_BREAK_BLOCK,
+        "",
+        report.get("findings_heading", "## Findings"),
+        "",
+    ]
+    yield "\n".join(header_lines) + "\n"
+
+    if not report["findings"]:
+        yield "No findings matched the selected criteria.\n"
+        return
+
+    finding_index = 1
+    for finding in report["findings"]:
+        chunk = [
+            _render_global_report_finding_markdown(finding, finding_index),
+            "",
+            PAGE_BREAK_BLOCK,
+            "",
+        ]
+        yield "\n".join(chunk) + "\n"
+        finding_index += 1
+
+    appendix = report.get("appendix", [])
+    if appendix:
+        appendix_lines = [
+            "## Appendix: Per-Scan Breakdown",
+            "",
+            "| Scan | Findings | Hosts | Critical | High | Medium | Low | Info |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for row in appendix:
+            severity_counts = row["severity_counts"]
+            appendix_lines.append(
+                f"| {_escape_markdown_table(row['scan_name'])} "
+                f"| {row['finding_count']} "
+                f"| {row['host_count']} "
+                f"| {severity_counts.get(4, 0)} "
+                f"| {severity_counts.get(3, 0)} "
+                f"| {severity_counts.get(2, 0)} "
+                f"| {severity_counts.get(1, 0)} "
+                f"| {severity_counts.get(0, 0)} |"
+            )
+        yield "\n".join(appendix_lines) + "\n"
+
+
+def render_global_report_markdown(report: dict[str, Any]) -> str:
+    """Render an aggregated whole-estate report as a single Markdown string."""
+
+    return "".join(iter_global_report_markdown(report))

@@ -26,7 +26,22 @@ from vulnsight.commands.finding import (
     _get_text_field,
 )
 from vulnsight.commands.findings import SEVERITY_LABELS, _resolve_minimum_severity
-from vulnsight.commands.scans import _build_client
+from vulnsight.commands.report import (
+    DEFAULT_TEMPLATE_PATH,
+    SUPPORTED_REPORT_FORMATS,
+    _convert_with_pandoc,
+    _normalise_report_format,
+    _resolve_output_path,
+    build_global_report,
+    check_pandoc_available,
+    write_global_report_csv,
+)
+from vulnsight.commands.scans import (
+    _build_client,
+    _build_folder_map,
+    _resolve_folder_filter,
+)
+from vulnsight.formatters.report import iter_global_report_markdown
 from vulnsight.validation import (
     get_validation,
     get_validation_display,
@@ -592,6 +607,7 @@ def global_findings(
     output_format: str = "table",
     status: str | None = None,
     exclude_status: str | None = None,
+    folder: str | None = None,
 ) -> None:
     """Aggregate findings across all scans using each scan's latest completed run."""
 
@@ -612,6 +628,19 @@ def global_findings(
 
     if not scans or not completed_runs:
         return
+
+    if folder:
+        completed_runs, resolved_folder = _filter_runs_by_folder(
+            client, scans, completed_runs, folder
+        )
+        if completed_runs is None:
+            return
+        if not completed_runs:
+            console.print(
+                f"[yellow]No completed scan data available in folder "
+                f"'{resolved_folder}'.[/yellow]"
+            )
+            return
 
     aggregated_findings = _aggregate_global_findings(
         completed_runs,
@@ -691,6 +720,7 @@ def global_summary(
     top_risks: str | None = None,
     sort: str = "desc",
     limit: int = 10,
+    folder: str | None = None,
 ) -> None:
     """Show a summary of findings across all scans."""
 
@@ -703,6 +733,19 @@ def global_summary(
 
     if not scans or not completed_runs:
         return
+
+    if folder:
+        completed_runs, resolved_folder = _filter_runs_by_folder(
+            client, scans, completed_runs, folder
+        )
+        if completed_runs is None:
+            return
+        if not completed_runs:
+            console.print(
+                f"[yellow]No completed scan data available in folder "
+                f"'{resolved_folder}'.[/yellow]"
+            )
+            return
 
     aggregated_findings = _aggregate_global_findings(
         completed_runs,
@@ -726,7 +769,9 @@ def global_summary(
     )
 
 
-def global_finding(plugin_id: int, min_severity: str | None = None) -> None:
+def global_finding(
+    plugin_id: int, min_severity: str | None = None, folder: str | None = None
+) -> None:
     """Show a detailed cross-scan view of a single plugin."""
 
     minimum_severity = _resolve_minimum_severity(min_severity)
@@ -735,6 +780,19 @@ def global_finding(plugin_id: int, min_severity: str | None = None) -> None:
 
     if not scans or not completed_runs:
         return
+
+    if folder:
+        completed_runs, resolved_folder = _filter_runs_by_folder(
+            client, scans, completed_runs, folder
+        )
+        if completed_runs is None:
+            return
+        if not completed_runs:
+            console.print(
+                f"[yellow]No completed scan data available in folder "
+                f"'{resolved_folder}'.[/yellow]"
+            )
+            return
 
     matching_scans: list[dict[str, Any]] = []
     max_severity_value: int | None = None
@@ -896,6 +954,196 @@ def _print_global_evidence(matching_scans: list[dict[str, Any]]) -> None:
         console.print("No plugin output available.", highlight=False)
 
 
+def _filter_runs_by_scan_names(
+    scans: list[dict[str, Any]],
+    completed_runs: list[dict[str, Any]],
+    requested: list[str],
+) -> tuple[list[dict[str, Any]] | None, list[str] | None]:
+    """Limit completed runs to the requested scan names.
+
+    Returns the filtered runs and the resolved scan names, or (None, None) when a
+    requested scan name does not exist.
+    """
+
+    available_names = {
+        str(scan.get("name", "")).strip().lower(): str(scan.get("name", "")).strip()
+        for scan in scans
+    }
+
+    resolved_names: list[str] = []
+    for name in requested:
+        key = str(name).strip().lower()
+        if key not in available_names:
+            console.print(f"[red]Scan not found:[/red] {name}")
+            console.print("Use 'vulnsight scans' to list available scans.")
+            return None, None
+        resolved_names.append(available_names[key])
+
+    resolved_keys = {name.lower() for name in resolved_names}
+    filtered_runs = [
+        run
+        for run in completed_runs
+        if str(run["scan_name"]).strip().lower() in resolved_keys
+    ]
+    return filtered_runs, sorted(set(resolved_names))
+
+
+def _filter_runs_by_folder(
+    client,
+    scans: list[dict[str, Any]],
+    completed_runs: list[dict[str, Any]],
+    folder: str,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Limit completed runs to scans within the requested folder.
+
+    Returns the filtered runs and the resolved folder name, or (None, None)
+    when the requested folder does not exist.
+    """
+
+    folder_map = _build_folder_map(client)
+    folder_id = _resolve_folder_filter(folder_map, folder)
+    if folder_id is None:
+        console.print(f"[red]Folder not found:[/red] {folder}")
+        if folder_map:
+            available = ", ".join(
+                sorted(name for name in folder_map.values() if name)
+            )
+            console.print(f"Available folders: {available}")
+        return None, None
+
+    scan_folder = {
+        int(scan.get("id", 0) or 0): scan.get("folder_id") for scan in scans
+    }
+    filtered_runs = [
+        run
+        for run in completed_runs
+        if scan_folder.get(int(run["scan_id"])) is not None
+        and int(scan_folder[int(run["scan_id"])]) == folder_id
+    ]
+    return filtered_runs, folder_map[folder_id]
+
+
+def global_report(
+    output_format: str | None = None,
+    min_severity: str | None = None,
+    severity: str | None = None,
+    only: str | None = None,
+    exclude: str | None = None,
+    folder: str | None = None,
+    scan: list[str] | None = None,
+    output: str | None = None,
+    toc: bool = False,
+) -> None:
+    """Generate an aggregated whole-estate report across all scans."""
+
+    resolved_format = _normalise_report_format(output_format)
+    if resolved_format not in SUPPORTED_REPORT_FORMATS:
+        console.print(
+            f"Error: Unsupported format '{output_format}'. "
+            f"Supported formats: {', '.join(sorted(SUPPORTED_REPORT_FORMATS))}"
+        )
+        return
+
+    if severity and min_severity:
+        console.print("[red]Use either --severity or --min-severity, not both.[/red]")
+        return
+
+    resolved_only = _resolve_validation_status_filter(only)
+    resolved_exclude = _resolve_validation_status_filter(exclude)
+    if resolved_only is not None and resolved_exclude is not None:
+        console.print("[red]Use either --only or --exclude, not both.[/red]")
+        return
+
+    if toc and resolved_format != "docx":
+        console.print(
+            "[yellow]Warning: --toc is only used with --format docx and will be ignored.[/yellow]"
+        )
+        toc = False
+
+    exact_severity = _resolve_minimum_severity(severity) if severity else None
+    minimum_severity = _resolve_minimum_severity(min_severity)
+
+    client = _build_client()
+    scans, completed_runs = _load_scans_and_completed_runs(client)
+    if not scans or not completed_runs:
+        return
+
+    requested_folder: str | None = None
+    if folder:
+        completed_runs, requested_folder = _filter_runs_by_folder(
+            client, scans, completed_runs, folder
+        )
+        if completed_runs is None:
+            return
+        if not completed_runs:
+            console.print(
+                f"[yellow]No completed scan data available in folder "
+                f"'{requested_folder}'.[/yellow]"
+            )
+            return
+
+    requested_scans: list[str] | None = None
+    if scan:
+        completed_runs, requested_scans = _filter_runs_by_scan_names(
+            scans, completed_runs, scan
+        )
+        if completed_runs is None:
+            return
+        if not completed_runs:
+            console.print(
+                "[yellow]No completed scan data available for the selected scans.[/yellow]"
+            )
+            return
+
+    report = build_global_report(
+        client,
+        completed_runs,
+        {
+            "severity": exact_severity,
+            "min_severity": minimum_severity,
+            "only_validation": resolved_only,
+            "exclude_validation": resolved_exclude,
+            "scans_available": len(scans),
+            "requested_scans": requested_scans,
+            "requested_folder": requested_folder,
+        },
+    )
+
+    output_path = _resolve_output_path(output, "estate_report", resolved_format)
+
+    if resolved_format == "csv":
+        with console.status("Writing CSV report...", spinner="dots"):
+            write_global_report_csv(report, output_path)
+        console.print(f"[green]Report written:[/green] {output_path}")
+        return
+
+    check_pandoc_available()
+
+    if not DEFAULT_TEMPLATE_PATH.exists():
+        console.print(
+            f"[red]Error: Default report template not found:[/red] {DEFAULT_TEMPLATE_PATH}"
+        )
+        raise typer.Exit(code=1)
+
+    with console.status(
+        "Drafting report and converting to DOCX with Pandoc (this can take a moment)...",
+        spinner="dots",
+    ):
+        _convert_with_pandoc(
+            iter_global_report_markdown(report),
+            output_path,
+            template_path=DEFAULT_TEMPLATE_PATH,
+            toc=toc,
+        )
+
+    console.print(f"[green]Report written:[/green] {output_path}")
+    if toc:
+        console.print(
+            "[yellow]Note:[/yellow] When opening this document in Word, you may see "
+            "a field-update prompt for the table of contents. This is expected and harmless."
+        )
+
+
 @global_app.command("findings")
 def global_findings_command(
     severity: str | None = typer.Option(
@@ -925,10 +1173,15 @@ def global_findings_command(
         "--exclude",
         help="Exclude validation status: confirmed, false_positive, or unreviewed.",
     ),
+    folder: str | None = typer.Option(
+        None,
+        "--folder",
+        help="Limit to scans in this folder (by folder name, case-insensitive).",
+    ),
 ) -> None:
     """Show aggregated findings across all scans."""
 
-    global_findings(severity, min_severity, format, status, exclude)
+    global_findings(severity, min_severity, format, status, exclude, folder)
 
 
 @global_app.command("summary")
@@ -949,10 +1202,15 @@ def global_summary_command(
     limit: int = typer.Option(
         10, "--limit", help="Maximum number of Top Risks rows to display."
     ),
+    folder: str | None = typer.Option(
+        None,
+        "--folder",
+        help="Limit to scans in this folder (by folder name, case-insensitive).",
+    ),
 ) -> None:
     """Show a summary of findings across all scans."""
 
-    global_summary(min_severity, top_risks, sort, limit)
+    global_summary(min_severity, top_risks, sort, limit, folder)
 
 
 @global_app.command("finding", no_args_is_help=True)
@@ -963,7 +1221,67 @@ def global_finding_command(
         "--min-severity",
         help="Minimum severity: info, low, medium, high, or critical.",
     ),
+    folder: str | None = typer.Option(
+        None,
+        "--folder",
+        help="Limit to scans in this folder (by folder name, case-insensitive).",
+    ),
 ) -> None:
     """Show detailed information for a finding across all scans."""
 
-    global_finding(plugin_id, min_severity)
+    global_finding(plugin_id, min_severity, folder)
+
+
+@global_app.command("report")
+def global_report_command(
+    format: str | None = typer.Option(
+        None,
+        "--format",
+        help="Output format: docx or csv. Defaults to docx.",
+    ),
+    min_severity: str | None = typer.Option(
+        None,
+        "--min-severity",
+        help="Minimum severity: info, low, medium, high, or critical.",
+    ),
+    severity: str | None = typer.Option(
+        None,
+        "--severity",
+        help="Only include one severity: info, low, medium, high, or critical.",
+    ),
+    only: str | None = typer.Option(
+        None,
+        "--only",
+        help="Only include validation status: confirmed, false_positive, or unreviewed.",
+    ),
+    exclude: str | None = typer.Option(
+        None,
+        "--exclude",
+        help="Exclude validation status: confirmed, false_positive, or unreviewed.",
+    ),
+    folder: str | None = typer.Option(
+        None,
+        "--folder",
+        help="Limit the report to scans in this folder (by folder name, case-insensitive).",
+    ),
+    scan: list[str] | None = typer.Option(
+        None,
+        "--scan",
+        help="Limit the report to these scans. Repeat the option for multiple scans.",
+    ),
+    output: str | None = typer.Option(
+        None,
+        "--output",
+        help="Output file path. Defaults to a timestamped .docx or .csv file.",
+    ),
+    toc: bool = typer.Option(
+        False,
+        "--toc",
+        help="Include a table of contents. DOCX only.",
+    ),
+) -> None:
+    """Generate an aggregated whole-estate report across all scans."""
+
+    global_report(
+        format, min_severity, severity, only, exclude, folder, scan, output, toc
+    )

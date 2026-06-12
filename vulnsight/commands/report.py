@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 import platform
@@ -21,7 +22,7 @@ from vulnsight.commands.finding import build_finding_data
 from vulnsight.commands.history import _format_timestamp
 from vulnsight.commands.hosts import _get_host_os
 from vulnsight.commands.summary import _resolve_host_scope
-from vulnsight.commands.findings import _resolve_minimum_severity
+from vulnsight.commands.findings import _get_scan_host_names, _resolve_minimum_severity
 from vulnsight.commands.scans import _build_client
 from vulnsight.context import load_context
 from vulnsight.formatters.report import render_report_markdown
@@ -103,12 +104,17 @@ def _resolve_output_path(
 
 
 def _convert_with_pandoc(
-    markdown: str,
+    markdown: str | Iterable[str],
     output_path: Path,
     template_path: Path | None = None,
     toc: bool = False,
 ) -> None:
-    """Convert Markdown content to another format via Pandoc."""
+    """Convert Markdown content to another format via Pandoc.
+
+    ``markdown`` may be a single string or an iterable of string chunks. The
+    chunked form is written to the temporary file incrementally so large
+    reports never hold the whole rendered document in memory at once.
+    """
 
     temp_path: Path | None = None
     try:
@@ -118,7 +124,11 @@ def _convert_with_pandoc(
             suffix=".md",
             delete=False,
         ) as temp_file:
-            temp_file.write(markdown)
+            if isinstance(markdown, str):
+                temp_file.write(markdown)
+            else:
+                for chunk in markdown:
+                    temp_file.write(chunk)
             temp_path = Path(temp_file.name)
 
         cmd = ["pandoc", str(temp_path), "-o", str(output_path)]
@@ -129,7 +139,19 @@ def _convert_with_pandoc(
 
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as exc:
-        console.print(f"Error: Pandoc conversion failed ({exc.returncode}).")
+        console.print(f"Error: Pandoc conversion failed (exit code {exc.returncode}).")
+        console.print(
+            "[dim]First check that 'pandoc --version' runs cleanly — a broken or "
+            "shimmed Pandoc install is the usual cause. You can also narrow scope "
+            "with --folder / --scan / --min-severity, or export with --format csv.[/dim]"
+        )
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Error: Could not run Pandoc: {exc}")
+        console.print(
+            "[dim]Check that Pandoc is installed and that 'pandoc --version' runs "
+            "cleanly. You can also export with --format csv to skip Pandoc.[/dim]"
+        )
         raise typer.Exit(code=1) from exc
     finally:
         if temp_path is not None and temp_path.exists():
@@ -613,11 +635,11 @@ def generate_report(
     )
 
     if resolved_format == "csv":
-        _write_report_csv(report, output_path)
+        with console.status("Writing CSV report...", spinner="dots"):
+            _write_report_csv(report, output_path)
         console.print(f"[green]Report written:[/green] {output_path}")
         return
 
-    markdown = render_report_markdown(report)
     check_pandoc_available()
 
     template_path: Path | None = None
@@ -627,7 +649,13 @@ def generate_report(
             console.print(f"[red]Error: Default report template not found:[/red] {template_path}")
             raise typer.Exit(code=1)
 
-    _convert_with_pandoc(markdown, output_path, template_path=template_path, toc=toc)
+    with console.status("Rendering report content...", spinner="dots") as status:
+        markdown = render_report_markdown(report)
+        status.update(
+            f"Converting to {resolved_format.upper()} with Pandoc "
+            "(this can take a moment)..."
+        )
+        _convert_with_pandoc(markdown, output_path, template_path=template_path, toc=toc)
 
     console.print(f"[green]Report written:[/green] {output_path}")
     if toc and resolved_format == "docx":
@@ -635,3 +663,359 @@ def generate_report(
             "[yellow]Note:[/yellow] When opening this document in Word, you may see "
             "a field-update prompt for the table of contents. This is expected and harmless."
         )
+
+
+GLOBAL_VALIDATION_ORDER = ("confirmed", "false_positive", "unreviewed")
+
+
+def _build_global_validation_summary(validation_counts: dict[str, int]) -> str:
+    """Render a compact validation summary for an aggregated estate finding."""
+
+    parts: list[str] = []
+    for status in GLOBAL_VALIDATION_ORDER:
+        count = int(validation_counts.get(status, 0) or 0)
+        if count < 1:
+            continue
+        parts.append(f"{get_validation_display(status)}: {count}")
+
+    if not parts:
+        return "Unreviewed"
+
+    return ", ".join(parts)
+
+
+def _build_global_scope_labels(
+    requested_scans: list[str] | None,
+    scans_included: int,
+    exact_severity: int | None,
+    minimum_severity: int | None,
+    only_validation: str | None,
+    exclude_validation: str | None,
+    requested_folder: str | None = None,
+) -> dict[str, str]:
+    """Build estate report scope labels from the applied filters."""
+
+    if requested_scans:
+        scans_label = ", ".join(requested_scans)
+    else:
+        scans_label = f"ALL ({scans_included})"
+
+    if exact_severity is not None:
+        severity_label = f"{SEVERITY_LABELS[exact_severity]} only"
+    elif minimum_severity is not None:
+        severity_label = f">= {SEVERITY_LABELS[minimum_severity]}"
+    else:
+        severity_label = "None"
+
+    if only_validation is not None:
+        validation_label = f"{get_validation_display(only_validation)} only"
+    elif exclude_validation is not None:
+        validation_label = f"Excluding {get_validation_display(exclude_validation)}"
+    else:
+        validation_label = "All"
+
+    return {
+        "folder": requested_folder or "All",
+        "scans": scans_label,
+        "severity": severity_label,
+        "validation": validation_label,
+    }
+
+
+def _format_global_evidence_csv(finding: dict[str, Any]) -> str:
+    """Render aggregated finding evidence for a CSV cell, including scan context."""
+
+    rows: list[str] = []
+    for index, entry in enumerate(finding.get("evidence", []), start=1):
+        parts = [f"Entry {index}"]
+        scan = str(entry.get("scan") or "").strip()
+        target = str(entry.get("target") or "").strip()
+        host = str(entry.get("host") or "").strip()
+        service = str(entry.get("service") or "").strip()
+        content = str(entry.get("content") or "").strip()
+
+        if scan:
+            parts.append(f"Scan: {scan}")
+        if target:
+            parts.append(f"Target: {target}")
+        elif host:
+            parts.append(f"Host: {host}")
+        if service:
+            parts.append(f"Service: {service}")
+        if content:
+            parts.append(content)
+
+        rows.append("\n".join(parts))
+
+    return _join_csv_values(rows)
+
+
+def build_global_report(
+    client,
+    completed_runs: list[dict[str, Any]],
+    filters: dict[str, Any],
+) -> dict[str, Any]:
+    """Aggregate findings across completed scan runs into a whole-estate report model."""
+
+    exact_severity = filters.get("severity")
+    minimum_severity = filters.get("min_severity")
+    only_validation = filters.get("only_validation")
+    exclude_validation = filters.get("exclude_validation")
+    scans_available = int(filters.get("scans_available", len(completed_runs)))
+    requested_scans = filters.get("requested_scans")
+    requested_folder = filters.get("requested_folder")
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    estate_hosts: set[str] = set()
+    per_scan: dict[str, dict[str, Any]] = {}
+    tasks: list[dict[str, Any]] = []
+
+    for run in completed_runs:
+        scan_id = int(run["scan_id"])
+        history_id = int(run["history_id"])
+        scan_name = str(run["scan_name"])
+        result_details = run["result_details"]
+
+        estate_hosts.update(_get_scan_host_names(result_details.get("hosts", [])))
+        per_scan.setdefault(
+            scan_name,
+            {
+                "scan_name": scan_name,
+                "finding_plugins": set(),
+                "hosts": set(),
+                "severity_counts": {level: 0 for level in SEVERITY_LABELS},
+            },
+        )
+
+        for vulnerability in result_details.get("vulnerabilities", []):
+            plugin_id = int(vulnerability.get("plugin_id", 0) or 0)
+            severity_value = int(vulnerability.get("severity", 0) or 0)
+
+            if exact_severity is not None and severity_value != exact_severity:
+                continue
+            if minimum_severity is not None and severity_value < minimum_severity:
+                continue
+
+            status = str(
+                get_validation(scan_id, history_id, plugin_id).get("status") or "unreviewed"
+            )
+            if only_validation is not None and status != only_validation:
+                continue
+            if exclude_validation is not None and status == exclude_validation:
+                continue
+
+            tasks.append(
+                {
+                    "scan_id": scan_id,
+                    "history_id": history_id,
+                    "scan_name": scan_name,
+                    "result_details": result_details,
+                    "plugin_id": plugin_id,
+                    "severity_value": severity_value,
+                    "status": status,
+                }
+            )
+
+    aggregated: dict[int, dict[str, Any]] = {}
+
+    total = len(tasks)
+    with console.status(
+        f"Building estate report from {total} finding(s)...",
+        spinner="dots",
+    ) as progress:
+        for index, task in enumerate(tasks, start=1):
+            scan_name = task["scan_name"]
+            plugin_id = task["plugin_id"]
+            progress.update(
+                f"Processing finding {index}/{total} from {scan_name} (plugin {plugin_id})"
+            )
+
+            try:
+                finding_data = build_finding_data(
+                    client,
+                    task["result_details"],
+                    task["scan_id"],
+                    task["history_id"],
+                    plugin_id,
+                )
+            except requests.RequestException:
+                continue
+            except ValueError:
+                continue
+
+            aggregated_finding = aggregated.setdefault(
+                plugin_id,
+                {
+                    "id": finding_data["id"],
+                    "name": finding_data["name"],
+                    "severity": finding_data["severity"],
+                    "cves": finding_data["cves"],
+                    "description": finding_data["description"],
+                    "solution": finding_data["solution"],
+                    "metadata_sections": finding_data["metadata_sections"],
+                    "reference_sections": finding_data["reference_sections"],
+                    "hosts_set": set(),
+                    "evidence": [],
+                    "scan_names": set(),
+                    "validation_counts": {
+                        "confirmed": 0,
+                        "false_positive": 0,
+                        "unreviewed": 0,
+                    },
+                },
+            )
+
+            new_severity = finding_data["severity"].get("value") or 0
+            current_severity = aggregated_finding["severity"].get("value") or 0
+            if new_severity > current_severity:
+                aggregated_finding["severity"] = finding_data["severity"]
+            if not aggregated_finding["name"] or aggregated_finding["name"] == "Not available.":
+                aggregated_finding["name"] = finding_data["name"]
+
+            finding_hosts = finding_data.get("hosts", [])
+            aggregated_finding["hosts_set"].update(finding_hosts)
+            for evidence_entry in finding_data.get("evidence", []):
+                tagged_entry = dict(evidence_entry)
+                tagged_entry["scan"] = scan_name
+                aggregated_finding["evidence"].append(tagged_entry)
+            aggregated_finding["scan_names"].add(scan_name)
+            aggregated_finding["validation_counts"][task["status"]] = (
+                int(aggregated_finding["validation_counts"].get(task["status"], 0) or 0) + 1
+            )
+
+            scan_stats = per_scan[scan_name]
+            scan_stats["finding_plugins"].add(plugin_id)
+            scan_stats["hosts"].update(finding_hosts)
+            if task["severity_value"] in scan_stats["severity_counts"]:
+                scan_stats["severity_counts"][task["severity_value"]] += 1
+
+    findings: list[dict[str, Any]] = []
+    for aggregated_finding in aggregated.values():
+        hosts = sorted(aggregated_finding["hosts_set"])
+        scan_names = sorted(aggregated_finding["scan_names"])
+        findings.append(
+            {
+                "id": aggregated_finding["id"],
+                "name": aggregated_finding["name"],
+                "severity": aggregated_finding["severity"],
+                "host_count": len(hosts),
+                "hosts": hosts,
+                "cves": aggregated_finding["cves"],
+                "description": aggregated_finding["description"],
+                "solution": aggregated_finding["solution"],
+                "evidence": aggregated_finding["evidence"],
+                "metadata_sections": aggregated_finding["metadata_sections"],
+                "reference_sections": aggregated_finding["reference_sections"],
+                "scan_names": scan_names,
+                "scan_count": len(scan_names),
+                "validation_counts": aggregated_finding["validation_counts"],
+                "validation_summary": _build_global_validation_summary(
+                    aggregated_finding["validation_counts"]
+                ),
+            }
+        )
+
+    findings.sort(
+        key=lambda item: (
+            -(item["severity"].get("value") or 0),
+            str(item["name"]).lower(),
+        )
+    )
+
+    appendix = sorted(
+        (
+            {
+                "scan_name": stats["scan_name"],
+                "finding_count": len(stats["finding_plugins"]),
+                "host_count": len(stats["hosts"]),
+                "severity_counts": stats["severity_counts"],
+            }
+            for stats in per_scan.values()
+        ),
+        key=lambda row: row["scan_name"].lower(),
+    )
+
+    return {
+        "estate": {
+            "scans_available": scans_available,
+            "scans_included": len(completed_runs),
+            "host_total": len(estate_hosts),
+            "generated_at": generated_at,
+        },
+        "hosts": {"total": len(estate_hosts)},
+        "scope": _build_global_scope_labels(
+            requested_scans,
+            len(completed_runs),
+            exact_severity,
+            minimum_severity,
+            only_validation,
+            exclude_validation,
+            requested_folder,
+        ),
+        "findings_heading": _build_findings_heading(exact_severity, minimum_severity),
+        "findings": findings,
+        "appendix": appendix,
+    }
+
+
+def write_global_report_csv(report: dict[str, Any], output_path: Path) -> None:
+    """Write a verbose whole-estate report CSV export."""
+
+    headers = [
+        "generated_at",
+        "scans_included",
+        "scans_available",
+        "severity_scope",
+        "validation_scope",
+        "finding_id",
+        "finding_name",
+        "severity",
+        "scan_count",
+        "affected_scans",
+        "validation_summary",
+        "host_count",
+        "affected_hosts",
+        "cves",
+        "cvss_v3",
+        "cvss_v2",
+        "cpe",
+        "exploit_available",
+        "patch_publication_date",
+        "vulnerability_publication_date",
+        "technical_details",
+        "description",
+        "solution",
+        "evidence",
+        "references",
+    ]
+
+    with output_path.open("w", encoding="utf-8", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=headers)
+        writer.writeheader()
+
+        for finding in report.get("findings", []):
+            metadata_columns = _extract_metadata_csv_columns(finding)
+            writer.writerow(
+                {
+                    "generated_at": report["estate"]["generated_at"],
+                    "scans_included": report["estate"]["scans_included"],
+                    "scans_available": report["estate"]["scans_available"],
+                    "severity_scope": report["scope"]["severity"],
+                    "validation_scope": report["scope"]["validation"],
+                    "finding_id": finding.get("id", ""),
+                    "finding_name": finding.get("name", ""),
+                    "severity": finding.get("severity", {}).get("label", "Unknown"),
+                    "scan_count": finding.get("scan_count", 0),
+                    "affected_scans": _join_csv_values(finding.get("scan_names", [])),
+                    "validation_summary": finding.get("validation_summary", "Unreviewed"),
+                    "host_count": finding.get("host_count", 0),
+                    "affected_hosts": _join_csv_values(finding.get("hosts", [])),
+                    "cves": _join_csv_values(finding.get("cves", [])),
+                    **metadata_columns,
+                    "description": finding.get("description", ""),
+                    "solution": finding.get("solution", ""),
+                    "evidence": _format_global_evidence_csv(finding),
+                    "references": _format_references_csv(finding),
+                }
+            )

@@ -66,10 +66,15 @@ def scans(
         "--details",
         help="Also fetch slower per-scan run counts and credential status.",
     ),
+    folder: str | None = typer.Option(
+        None,
+        "--folder",
+        help="Only show scans in this folder (by folder name, case-insensitive).",
+    ),
 ) -> None:
     """List Nessus scans visible to the configured API keys."""
 
-    list_scans(details)
+    list_scans(details, folder)
 
 
 @app.command("ping")

@@ -971,8 +971,8 @@ def get_finding(
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             console.print("[red]Plugin not found in this scan.[/red]")
-        raise typer.Exit(code=1) from exc
-        console.print(f"[red]Failed to retrieve plugin details:[/red] {exc}")
+        else:
+            console.print(f"[red]Failed to retrieve plugin details:[/red] {exc}")
         raise typer.Exit(code=1) from exc
     except requests.RequestException as exc:
         console.print(f"[red]Failed to retrieve plugin details:[/red] {exc}")
