@@ -150,6 +150,29 @@ filtering, and the validation overlay — and run without a live Nessus instance
 - Validation is local only.
 - It is not a full vulnerability management platform.
 
+## Potential Future Work
+
+Ideas captured for later — not yet implemented.
+
+**Management metrics**
+
+- **Trend over time** — severity and open-vs-resolved metrics across a scan's historical runs (Nessus retains scan history), to show direction of travel rather than a single snapshot.
+- **Disposition states** — extend the validation overlay beyond `confirmed` / `false_positive` / `unreviewed` to a lifecycle view (`open` / `risk-accepted` / `remediated`), unlocking open-vs-accepted-vs-fixed reporting and SLA / aging metrics (validation timestamps are already stored).
+- **Top-remediations rollup** — surface the Nessus remediations summary as an estate or folder "fix these N actions to resolve X% of findings" view.
+- **Top risky hosts** — asset-centric ranking (weighted risk per host) to complement the plugin-centric top-risks.
+- **Scan coverage / quality rollup** — credentialed vs uncredentialed scans, scans included vs available, and run freshness as a scanning-health metric.
+
+**Analyst workflow**
+
+- **Bulk / filtered validation** — set validation on multiple findings at once (by ID list, severity, or filter).
+- **Keyword / CVE search** — filter findings by plugin name or CVE.
+- **Compliance / audit results** — surface compliance scan data (currently fetched but unused) for compliance-scan workflows.
+
+**Considered but not planned**
+
+- Exploit-prioritisation scores (VPR / EPSS) are Tenable Vulnerability Management / Security Center features and are generally not exposed by the Nessus Professional API.
+- Native Nessus PDF / HTML export passthrough — the tailored report output is preferred.
+
 ## Documentation
 
 The growing user documentation lives in [the VulnSight documentation](docs/README.md). It covers installation, configuration, scan context, findings review, validation, diffing, reporting, global views, command reference, and troubleshooting.
