@@ -1,5 +1,6 @@
 # Python bytecode and import caches
 __pycache__/
+.pytest_cache/
 
 # Local editor and workspace settings
 .obsidian/

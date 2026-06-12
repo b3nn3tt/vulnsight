@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 from typing import Any
 
@@ -36,6 +37,7 @@ from vulnsight.commands.report import (
     check_pandoc_available,
     write_global_report_csv,
 )
+from vulnsight.client import select_latest_usable_run
 from vulnsight.commands.scans import (
     _build_client,
     _build_folder_map,
@@ -139,63 +141,79 @@ def _build_validation_summary(validation_counts: dict[str, int]) -> str:
 
 
 def _get_latest_completed_history(scan_details: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the latest completed history entry for a scan."""
+    """Return the latest usable history entry for a scan, or None."""
 
-    completed_entries = [
-        entry
-        for entry in scan_details.get("history", [])
-        if str(entry.get("status", "")).strip().lower() == "completed"
-    ]
-    if not completed_entries:
+    return select_latest_usable_run(scan_details.get("history", []))
+
+
+def _fetch_completed_run(client, scan: dict[str, Any]) -> dict[str, Any] | None:
+    """Fetch the latest usable run details for a single scan.
+
+    Returns the run dict, or None when the scan has no usable run. API failures
+    raise requests.RequestException for the caller to surface.
+    """
+
+    scan_id = int(scan.get("id", 0) or 0)
+    scan_name = str(scan.get("name", f"Scan {scan_id}"))
+
+    scan_details = client.get_scan_details(scan_id)
+    latest_completed = _get_latest_completed_history(scan_details)
+    if latest_completed is None:
         return None
 
-    return max(
-        completed_entries,
-        key=lambda entry: (
-            int(entry.get("history_id", 0) or 0),
-            int(entry.get("creation_date", 0) or 0),
-        ),
-    )
+    history_id = int(latest_completed.get("history_id", 0) or 0)
+    result_details = client.get_scan_result_details(scan_id, history_id)
+
+    return {
+        "scan_id": scan_id,
+        "scan_name": scan_name,
+        "history_id": history_id,
+        "result_details": result_details,
+    }
 
 
 def _iter_completed_scan_runs(
     client, scans: Iterable[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Collect latest completed run details for each available scan."""
+    """Collect the latest usable run for each scan, fetched concurrently.
 
-    completed_runs: list[dict[str, Any]] = []
+    Each scan needs two API round-trips (details, then results); running them in
+    a small thread pool turns an N-scan estate from 2N sequential requests into
+    a handful of concurrent batches. Input order is preserved. A failure on any
+    scan aborts the whole operation, matching the previous sequential behaviour
+    (an estate report must not silently omit a scan).
+    """
 
-    for scan in scans:
-        scan_id = int(scan.get("id", 0) or 0)
-        scan_name = str(scan.get("name", f"Scan {scan_id}"))
+    scan_list = list(scans)
+    if not scan_list:
+        return []
 
-        try:
-            scan_details = client.get_scan_details(scan_id)
-        except requests.RequestException as exc:
-            console.print(f"[red]Failed to retrieve scan details:[/red] {exc}")
-            raise typer.Exit(code=1) from exc
+    results: list[dict[str, Any] | None] = [None] * len(scan_list)
+    total = len(scan_list)
+    max_workers = min(8, total)
 
-        latest_completed = _get_latest_completed_history(scan_details)
-        if latest_completed is None:
-            continue
-
-        history_id = int(latest_completed.get("history_id", 0) or 0)
-        try:
-            result_details = client.get_scan_result_details(scan_id, history_id)
-        except requests.RequestException as exc:
-            console.print(f"[red]Failed to retrieve scan findings:[/red] {exc}")
-            raise typer.Exit(code=1) from exc
-
-        completed_runs.append(
-            {
-                "scan_id": scan_id,
-                "scan_name": scan_name,
-                "history_id": history_id,
-                "result_details": result_details,
+    with console.status(
+        f"Fetching scan data for {total} scan(s)...", spinner="dots"
+    ) as progress:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(_fetch_completed_run, client, scan): index
+                for index, scan in enumerate(scan_list)
             }
-        )
 
-    return completed_runs
+            completed = 0
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except requests.RequestException as exc:
+                    console.print(f"[red]Failed to retrieve scan data:[/red] {exc}")
+                    raise typer.Exit(code=1) from exc
+
+                completed += 1
+                progress.update(f"Fetching scan data... {completed}/{total}")
+
+    return [run for run in results if run is not None]
 
 
 def _extract_plugin_core_fields(

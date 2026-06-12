@@ -6,6 +6,7 @@ import requests
 import typer
 from rich.console import Console
 
+from vulnsight.client import select_latest_usable_run
 from vulnsight.commands.scans import _build_client
 from vulnsight.context import save_context
 
@@ -51,24 +52,12 @@ def _resolve_scan_selector(
 
 
 def _get_latest_completed_history(scan_details: dict) -> dict:
-    """Return the latest completed history entry from scan details."""
+    """Return the latest usable history entry from scan details."""
 
-    completed_runs = [
-        entry
-        for entry in scan_details.get("history", [])
-        if str(entry.get("status", "")).lower() == "completed"
-    ]
-
-    if not completed_runs:
-        raise ValueError("No completed scan runs found.")
-
-    return max(
-        completed_runs,
-        key=lambda entry: (
-            int(entry.get("creation_date", 0) or 0),
-            int(entry.get("history_id", 0) or 0),
-        ),
-    )
+    run = select_latest_usable_run(scan_details.get("history", []))
+    if run is None:
+        raise ValueError("No usable scan runs found.")
+    return run
 
 
 def _get_scan_name(scan: dict | None, scan_details: dict, fallback: str) -> str:
@@ -137,7 +126,7 @@ def use_scan(
         console.print(f"[red]Failed to retrieve scan details:[/red] {exc}")
         raise typer.Exit(code=1) from exc
     except ValueError:
-        console.print(f"[red]No completed runs found for scan:[/red] {selector_value}")
+        console.print(f"[red]No usable runs found for scan:[/red] {selector_value}")
         raise typer.Exit(code=1)
 
     history_id = int(history.get("history_id", 0))

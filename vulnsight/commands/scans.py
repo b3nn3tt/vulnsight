@@ -10,7 +10,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from vulnsight.client import NessusClient
+from vulnsight.client import NessusClient, select_latest_usable_run
 from vulnsight.config import ENV_FILE, get_settings
 
 
@@ -138,25 +138,12 @@ def _get_credential_status(
             if scan_details is not None
             else client.get_scan_details(scan_id)
         )
-        history_entries = details.get("history", [])
-        completed_runs = [
-            entry
-            for entry in history_entries
-            if str(entry.get("status", "")).lower() == "completed"
-        ]
     except ValueError:
         return "Unknown"
 
-    if not completed_runs:
+    history = select_latest_usable_run(details.get("history", []))
+    if history is None:
         return "Unknown"
-
-    history = max(
-        completed_runs,
-        key=lambda entry: (
-            int(entry.get("creation_date", 0) or 0),
-            int(entry.get("history_id", 0) or 0),
-        ),
-    )
 
     history_id = history.get("history_id")
     if history_id is None:

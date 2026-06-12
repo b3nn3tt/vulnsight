@@ -22,6 +22,12 @@ VALIDATION_ALIASES = {
 }
 
 
+# Per-process cache of parsed validation payloads keyed by scan ID. Read-heavy
+# aggregations (reports, global views) call get_validation() once per finding;
+# without this they would re-read and re-parse the same file thousands of times.
+_VALIDATION_CACHE: dict[int, dict[str, Any]] = {}
+
+
 def _get_validation_path(scan_id: int) -> Path:
     """Return the validation file path for a scan."""
 
@@ -29,21 +35,28 @@ def _get_validation_path(scan_id: int) -> Path:
 
 
 def _load_scan_validation(scan_id: int) -> dict[str, Any]:
-    """Load the validation payload for a scan if it exists."""
+    """Load the validation payload for a scan, caching the result per process."""
+
+    if scan_id in _VALIDATION_CACHE:
+        return _VALIDATION_CACHE[scan_id]
 
     validation_path = _get_validation_path(scan_id)
     if not validation_path.exists():
-        return {}
+        payload: dict[str, Any] = {}
+    else:
+        payload = json.loads(validation_path.read_text(encoding="utf-8"))
 
-    return json.loads(validation_path.read_text(encoding="utf-8"))
+    _VALIDATION_CACHE[scan_id] = payload
+    return payload
 
 
 def _save_scan_validation(scan_id: int, payload: dict[str, Any]) -> None:
-    """Write the validation payload for a scan."""
+    """Write the validation payload for a scan and refresh the cache."""
 
     VALIDATION_DIR.mkdir(parents=True, exist_ok=True)
     validation_path = _get_validation_path(scan_id)
     validation_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _VALIDATION_CACHE[scan_id] = payload
 
 
 def _normalise_status_value(status: str | None) -> str:
@@ -150,6 +163,7 @@ def write_validation(
             validation_path = _get_validation_path(scan_id)
             if validation_path.exists():
                 validation_path.unlink()
+            _VALIDATION_CACHE.pop(scan_id, None)
             return
 
         _save_scan_validation(scan_id, payload)

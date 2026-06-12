@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import requests
@@ -11,6 +12,38 @@ from vulnsight.config import Settings
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+# Run statuses whose history entries carry usable result data. Imported scans
+# (uploaded .nessus files) report "imported" rather than "completed" but still
+# expose full vulnerability and host data.
+USABLE_RUN_STATUSES = frozenset({"completed", "imported"})
+
+
+def select_latest_usable_run(
+    history: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the most recent usable history entry, or None if there are none.
+
+    A run is usable when its status is in :data:`USABLE_RUN_STATUSES`. Entries
+    are ranked by creation date, then history ID.
+    """
+
+    usable = [
+        entry
+        for entry in history
+        if str(entry.get("status", "")).strip().lower() in USABLE_RUN_STATUSES
+    ]
+    if not usable:
+        return None
+
+    return max(
+        usable,
+        key=lambda entry: (
+            int(entry.get("creation_date", 0) or 0),
+            int(entry.get("history_id", 0) or 0),
+        ),
+    )
 
 
 class NessusClient:
@@ -57,24 +90,13 @@ class NessusClient:
         return self._get(f"/scans/{scan_id}")
 
     def get_latest_completed_history(self, scan_id: int) -> dict[str, Any]:
-        """Return the most recent completed history entry for a scan."""
+        """Return the most recent usable history entry for a scan."""
 
         details = self.get_scan_details(scan_id)
-        history = details.get("history", [])
-        completed_runs = [
-            entry for entry in history if str(entry.get("status", "")).lower() == "completed"
-        ]
-
-        if not completed_runs:
-            raise ValueError("No completed scan runs found.")
-
-        return max(
-            completed_runs,
-            key=lambda entry: (
-                int(entry.get("creation_date", 0) or 0),
-                int(entry.get("history_id", 0) or 0),
-            ),
-        )
+        run = select_latest_usable_run(details.get("history", []))
+        if run is None:
+            raise ValueError("No usable scan runs found.")
+        return run
 
     def get_plugin_details(
         self, scan_id: int, plugin_id: int, history_id: int
