@@ -6,12 +6,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv, set_key, unset_key
 
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 DEFAULT_NESSUS_URL = "https://10.54.29.242:8834"
 DEFAULT_NESSUS_TIMEOUT = 90
+DEFAULT_VALIDATION_DIR = (
+    Path(__file__).resolve().parent.parent / ".vulnsight" / "validation"
+)
 
 
 def reload_env() -> None:
@@ -65,6 +68,21 @@ def get_settings() -> Settings:
     )
 
 
+def get_validation_dir() -> Path:
+    """Return the directory used to store the validation overlay.
+
+    Defaults to a local ``.vulnsight/validation`` directory. Set
+    ``VULNSIGHT_VALIDATION_DIR`` (for example to a shared file-server path) to
+    point the overlay at central storage so a team can share validation state.
+    """
+
+    reload_env()
+    configured = os.getenv("VULNSIGHT_VALIDATION_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return DEFAULT_VALIDATION_DIR
+
+
 def save_settings(base_url: str, access_key: str, secret_key: str) -> None:
     """Persist Nessus connection settings to the local .env file."""
 
@@ -76,3 +94,20 @@ def save_settings(base_url: str, access_key: str, secret_key: str) -> None:
     os.environ["NESSUS_URL"] = base_url.strip()
     os.environ["ACCESS_KEY"] = access_key.strip()
     os.environ["SECRET_KEY"] = secret_key.strip()
+
+
+def save_validation_dir(validation_dir: str | None) -> None:
+    """Persist or clear the shared validation directory in the local .env file.
+
+    A blank or None value clears the setting, reverting to local storage.
+    """
+
+    ENV_FILE.touch(exist_ok=True)
+    value = (validation_dir or "").strip()
+
+    if value:
+        set_key(str(ENV_FILE), "VULNSIGHT_VALIDATION_DIR", value)
+        os.environ["VULNSIGHT_VALIDATION_DIR"] = value
+    else:
+        unset_key(str(ENV_FILE), "VULNSIGHT_VALIDATION_DIR")
+        os.environ.pop("VULNSIGHT_VALIDATION_DIR", None)

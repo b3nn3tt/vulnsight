@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -11,7 +13,14 @@ import typer
 from rich.console import Console
 
 from vulnsight.client import NessusClient
-from vulnsight.config import ENV_FILE, Settings, get_settings, save_settings
+from vulnsight.config import (
+    ENV_FILE,
+    Settings,
+    get_settings,
+    get_validation_dir,
+    save_settings,
+    save_validation_dir,
+)
 
 
 console = Console()
@@ -242,6 +251,38 @@ def _prompt_for_credentials(base_url: str) -> tuple[str, str]:
             raise typer.Exit(code=1)
 
 
+def _prompt_for_validation_dir() -> str | None:
+    """Prompt for an optional shared validation directory.
+
+    Returns the chosen path, or None to use local storage.
+    """
+
+    console.print()
+    console.print(
+        "Validation status can be stored in a shared location (for example a "
+        "file-server path) so a team works from one overlay."
+    )
+
+    current = os.getenv("VULNSIGHT_VALIDATION_DIR", "").strip()
+    if current:
+        console.print(
+            "[dim]Press Enter to keep the current path, or type 'local' to "
+            "store validation locally.[/dim]"
+        )
+    else:
+        console.print("[dim]Leave blank to store validation locally.[/dim]")
+
+    response = typer.prompt(
+        "Shared validation directory",
+        default=current,
+        show_default=bool(current),
+    ).strip()
+
+    if response.lower() == "local":
+        return None
+    return response or None
+
+
 def run_setup(reconfigure: bool = False) -> None:
     """Interactively configure or reconfigure the local Nessus settings."""
 
@@ -258,7 +299,21 @@ def run_setup(reconfigure: bool = False) -> None:
     access_key, secret_key = _prompt_for_credentials(base_url)
     save_settings(base_url, access_key, secret_key)
 
+    validation_input = _prompt_for_validation_dir()
+    if validation_input:
+        target = Path(validation_input).expanduser()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            console.print(f"[green]Shared validation directory ready:[/green] {target}")
+        except OSError as exc:
+            console.print(
+                f"[yellow]Warning:[/yellow] Could not create '{target}' now ({exc}). "
+                "The path was saved and will be used once it is reachable."
+            )
+    save_validation_dir(validation_input)
+
     console.print()
     console.print("[green]VulnSight configuration saved.[/green]")
     console.print(f"Nessus URL : {base_url}")
+    console.print(f"Validation : {get_validation_dir()}")
     console.print(f"Config File: {ENV_FILE}")

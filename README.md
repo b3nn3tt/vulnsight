@@ -37,7 +37,7 @@ The tool is designed for internal, practitioner-led use. It is not trying to rep
 - Diffing between scan runs, including new, resolved, and drift-aware changed findings.
 - Remediation-focused output with `--remediation`.
 - CSV export for structured analysis and spreadsheet use.
-- Validation overlay with `Confirmed`, `False Positive`, and `Unreviewed`.
+- Validation overlay (`Confirmed`, `False Positive`, `Unreviewed`), optionally shared across a team.
 - Markdown to DOCX reporting via Pandoc, including a converged whole-estate report.
 
 ## Quick Start
@@ -99,6 +99,18 @@ python3 main.py report --help
 ```
 
 DOCX reporting requires Pandoc. CSV exports do not require Pandoc.
+
+## Shared validation (team use)
+
+Validation state (which findings are `Confirmed`, `False Positive`, or `Unreviewed`) is stored as a local overlay by default, so a single analyst can keep state without a database.
+
+For team work, point that overlay at shared storage so everyone reads and writes the same validation data. `setup` prompts for an optional shared directory, or you can set it directly in `.env`:
+
+```bash
+VULNSIGHT_VALIDATION_DIR=\\fileserver\share\vulnsight\validation
+```
+
+Writes merge into the latest on-disk state, so two analysts validating different findings in the same scan do not overwrite each other. Leave it unset to keep validation local.
 
 ## Design Principles
 

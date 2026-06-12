@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import sys
 
+from rich.console import Console
+
 from vulnsight.cli import app, print_unexpected_input_help
+from vulnsight.validation import ValidationStorageError
+
+
+console = Console()
 
 
 KNOWN_COMMANDS = {
@@ -51,4 +57,8 @@ def _handle_unexpected_root_input() -> None:
 
 if __name__ == "__main__":
     _handle_unexpected_root_input()
-    app()
+    try:
+        app()
+    except ValidationStorageError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise SystemExit(1)

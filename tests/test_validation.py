@@ -78,3 +78,42 @@ def test_distinct_findings_isolated(temp_validation_dir):
     assert get_validation(3, 30, 300)["status"] == "confirmed"
     assert get_validation(3, 30, 301)["status"] == "false_positive"
     assert get_validation(3, 30, 999)["status"] == "unreviewed"
+
+
+def test_write_merges_against_disk_not_stale_cache(temp_validation_dir):
+    # Finding 100 is written and now lives on disk.
+    write_validation(4, "Scan Four", 40, 100, "confirmed")
+    # Simulate a stale per-process cache that predates that on-disk finding,
+    # as would happen if another user wrote it after this process last read.
+    validation._VALIDATION_CACHE[4] = {}
+    # Writing a different finding must merge against the on-disk state, so the
+    # concurrently-written finding 100 is preserved rather than clobbered.
+    write_validation(4, "Scan Four", 40, 101, "false_positive")
+    assert get_validation(4, 40, 100)["status"] == "confirmed"
+    assert get_validation(4, 40, 101)["status"] == "false_positive"
+
+
+def test_local_storage_skips_reachability_check(temp_validation_dir, monkeypatch):
+    # With no shared dir configured, the reachability guard is a no-op even
+    # though the local directory does not exist yet.
+    monkeypatch.delenv("VULNSIGHT_VALIDATION_DIR", raising=False)
+    validation._ensure_storage_reachable()  # must not raise
+
+
+def test_unreachable_storage_raises_on_read(temp_validation_dir, monkeypatch):
+    def _boom():
+        raise validation.ValidationStorageError("share down")
+
+    monkeypatch.setattr(validation, "_ensure_storage_reachable", _boom)
+    validation._VALIDATION_CACHE.clear()
+    with pytest.raises(validation.ValidationStorageError):
+        get_validation(9, 90, 900)
+
+
+def test_unreachable_storage_raises_on_write(temp_validation_dir, monkeypatch):
+    def _boom():
+        raise validation.ValidationStorageError("share down")
+
+    monkeypatch.setattr(validation, "_ensure_storage_reachable", _boom)
+    with pytest.raises(validation.ValidationStorageError):
+        write_validation(9, "Scan Nine", 90, 900, "confirmed")
