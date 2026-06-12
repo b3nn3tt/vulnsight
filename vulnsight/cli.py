@@ -389,6 +389,16 @@ def summary(
     limit: int = typer.Option(
         10, "--limit", help="Maximum number of Top Risks rows to display."
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        help="Output format: table or csv. CSV (severity stats) is written to stdout.",
+    ),
+    by_host: bool = typer.Option(
+        False,
+        "--by-host",
+        help="Add a per-host breakdown of the severity-by-validation matrix.",
+    ),
 ) -> None:
     """Show a severity summary for the current scan context."""
 
@@ -410,7 +420,7 @@ def summary(
     sort = args["sort"]
     limit = args["limit"]
 
-    show_summary(host, exclude_host, min_severity, top_risks, sort, limit)
+    show_summary(host, exclude_host, min_severity, top_risks, sort, limit, format, by_host)
 
 
 @app.command("use-history", no_args_is_help=True)

@@ -11,6 +11,7 @@ This directory is the early home for VulnSight usage documentation. It is intend
 
 - [Scan Context](workflows/scan-context.md)
 - [Findings Review](workflows/findings-review.md)
+- [Summary](workflows/summary.md)
 - [Validation](workflows/validation.md)
 - [Diffing Scan Runs](workflows/diffing.md)
 - [Global Views](workflows/global-views.md)

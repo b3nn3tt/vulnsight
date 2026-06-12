@@ -26,7 +26,11 @@ from vulnsight.commands.finding import (
     _get_severity_label,
     _get_text_field,
 )
-from vulnsight.commands.findings import SEVERITY_LABELS, _resolve_minimum_severity
+from vulnsight.commands.findings import (
+    SEVERITY_LABELS,
+    _get_scan_host_names,
+    _resolve_minimum_severity,
+)
 from vulnsight.commands.report import (
     DEFAULT_TEMPLATE_PATH,
     SUPPORTED_REPORT_FORMATS,
@@ -42,6 +46,11 @@ from vulnsight.commands.scans import (
     _build_client,
     _build_folder_map,
     _resolve_folder_filter,
+)
+from vulnsight.commands.summary import (
+    _aggregate_summary_findings,
+    _build_per_host_matrices,
+    _print_severity_validation_matrix,
 )
 from vulnsight.formatters.report import iter_global_report_markdown
 from vulnsight.validation import (
@@ -437,13 +446,7 @@ def _print_global_summary_metrics(
     completed_runs: list[dict[str, Any]],
     aggregated_findings: dict[int, dict[str, Any]],
 ) -> None:
-    """Render the main Global Summary metrics."""
-
-    severity_counts = {level: 0 for level in SEVERITY_LABELS}
-    for finding in aggregated_findings.values():
-        severity_level = int(finding["severity"])
-        if severity_level in severity_counts:
-            severity_counts[severity_level] += 1
+    """Render the Global Summary header counts (the matrix follows separately)."""
 
     console.print("Global Summary", highlight=False)
     console.print()
@@ -452,11 +455,158 @@ def _print_global_summary_metrics(
     console.print(f"Findings        : {len(aggregated_findings)}", highlight=False)
     console.print()
 
+
+def _derive_plugin_status(validation_counts: dict[str, int]) -> str:
+    """Reduce a plugin's per-scan validation counts to one estate-wide status.
+
+    A plugin is treated as ``unreviewed`` if it is unreviewed in any included
+    scan (triage is incomplete), otherwise ``confirmed`` if confirmed anywhere,
+    otherwise ``false_positive``.
+    """
+
+    if int(validation_counts.get("unreviewed", 0) or 0) > 0:
+        return "unreviewed"
+    if int(validation_counts.get("confirmed", 0) or 0) > 0:
+        return "confirmed"
+    if int(validation_counts.get("false_positive", 0) or 0) > 0:
+        return "false_positive"
+    return "unreviewed"
+
+
+def _build_global_severity_validation_matrix(
+    aggregated_findings: dict[int, dict[str, Any]],
+) -> dict[int, dict[str, int]]:
+    """Build per-severity totals (unique plugins) broken down by validation."""
+
+    matrix = {
+        level: {"total": 0, "confirmed": 0, "false_positive": 0, "unreviewed": 0}
+        for level in SEVERITY_LABELS
+    }
+
+    for finding in aggregated_findings.values():
+        level = int(finding["severity"])
+        if level not in matrix:
+            continue
+        status = _derive_plugin_status(finding.get("validation_counts", {}))
+        row = matrix[level]
+        row["total"] += 1
+        row[status] = int(row.get(status, 0)) + 1
+
+    return matrix
+
+
+def _write_global_summary_csv(
+    matrix: dict[int, dict[str, int]], scope: str
+) -> None:
+    """Write the estate severity-by-validation matrix as CSV to stdout."""
+
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    writer.writerow(
+        ["scope", "severity", "total", "confirmed", "false_positive", "unreviewed"]
+    )
     for level in (4, 3, 2, 1, 0):
-        console.print(
-            f"{SEVERITY_LABELS[level]:<15}: {severity_counts[level]}",
-            highlight=False,
+        row = matrix[level]
+        writer.writerow(
+            [
+                scope,
+                SEVERITY_LABELS[level],
+                int(row["total"]),
+                int(row["confirmed"]),
+                int(row["false_positive"]),
+                int(row["unreviewed"]),
+            ]
         )
+
+
+def _build_global_per_host(
+    client,
+    completed_runs: list[dict[str, Any]],
+    minimum_severity: int | None,
+) -> dict[str, dict[str, dict[int, dict[str, int]]]]:
+    """Build per (scan, host) severity-by-validation matrices.
+
+    This is expensive: per-host data needs roughly one API call per finding per
+    scan. Progress is shown on stderr so it never pollutes a piped CSV.
+    """
+
+    per_scan: dict[str, dict[str, dict[int, dict[str, int]]]] = {}
+    total = len(completed_runs)
+    progress_console = Console(stderr=True)
+
+    with progress_console.status(
+        f"Fetching per-host data for {total} scan(s)...", spinner="dots"
+    ) as progress:
+        for index, run in enumerate(completed_runs, start=1):
+            scan_id = int(run["scan_id"])
+            history_id = int(run["history_id"])
+            scan_name = str(run["scan_name"])
+            result_details = run["result_details"]
+
+            progress.update(
+                f"Fetching per-host data: scan {index}/{total} ({scan_name})..."
+            )
+
+            scan_hosts = result_details.get("hosts", [])
+            scoped_hosts = set(_get_scan_host_names(scan_hosts))
+            aggregated = _aggregate_summary_findings(
+                client,
+                scan_id,
+                history_id,
+                scan_hosts,
+                scoped_hosts,
+                minimum_severity,
+                result_details.get("vulnerabilities", []),
+            )
+            per_scan[scan_name] = _build_per_host_matrices(
+                aggregated, scoped_hosts, scan_id, history_id
+            )
+
+    return per_scan
+
+
+def _print_global_per_host(
+    per_scan: dict[str, dict[str, dict[int, dict[str, int]]]],
+) -> None:
+    """Render per (scan, host) matrices grouped by scan."""
+
+    console.print()
+    console.print("Per-Host Breakdown", highlight=False)
+    for scan_name in sorted(per_scan):
+        console.print()
+        console.print(f"Scan: {scan_name}", highlight=False)
+        host_matrices = per_scan[scan_name]
+        for host in sorted(host_matrices):
+            console.print()
+            console.print(f"  Host: {host}", highlight=False)
+            _print_severity_validation_matrix(host_matrices[host])
+
+
+def _write_global_per_host_csv(
+    per_scan: dict[str, dict[str, dict[int, dict[str, int]]]],
+) -> None:
+    """Write per (scan, host) severity-by-validation rows as CSV to stdout."""
+
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    writer.writerow(
+        ["scan", "host", "severity", "total", "confirmed", "false_positive", "unreviewed"]
+    )
+    for scan_name in sorted(per_scan):
+        host_matrices = per_scan[scan_name]
+        for host in sorted(host_matrices):
+            host_matrix = host_matrices[host]
+            for level in (4, 3, 2, 1, 0):
+                row = host_matrix[level]
+                writer.writerow(
+                    [
+                        scan_name,
+                        host,
+                        SEVERITY_LABELS[level],
+                        int(row["total"]),
+                        int(row["confirmed"]),
+                        int(row["false_positive"]),
+                        int(row["unreviewed"]),
+                    ]
+                )
 
 
 def _get_top_risk_intro(mode: str) -> list[str]:
@@ -739,10 +889,13 @@ def global_summary(
     sort: str = "desc",
     limit: int = 10,
     folder: str | None = None,
+    output_format: str = "table",
+    by_host: bool = False,
 ) -> None:
     """Show a summary of findings across all scans."""
 
     minimum_severity = _resolve_minimum_severity(min_severity)
+    resolved_format = _validate_output_format(output_format)
     top_risks_mode = _validate_top_risks_mode(top_risks)
     sort_direction = _validate_sort_direction(sort)
     row_limit = _validate_limit(limit)
@@ -752,6 +905,7 @@ def global_summary(
     if not scans or not completed_runs:
         return
 
+    scope_label = "ALL"
     if folder:
         completed_runs, resolved_folder = _filter_runs_by_folder(
             client, scans, completed_runs, folder
@@ -764,14 +918,32 @@ def global_summary(
                 f"'{resolved_folder}'.[/yellow]"
             )
             return
+        scope_label = resolved_folder
 
     aggregated_findings = _aggregate_global_findings(
         completed_runs,
         minimum_severity=minimum_severity,
     )
 
+    matrix = _build_global_severity_validation_matrix(aggregated_findings)
+
+    per_host = None
+    if by_host:
+        per_host = _build_global_per_host(client, completed_runs, minimum_severity)
+
+    if resolved_format == "csv":
+        if by_host:
+            _write_global_per_host_csv(per_host)
+        else:
+            _write_global_summary_csv(matrix, scope_label)
+        return
+
     _print_global_summary_metrics(scans, completed_runs, aggregated_findings)
     _print_global_severity_note(None, minimum_severity)
+    _print_severity_validation_matrix(matrix)
+
+    if by_host:
+        _print_global_per_host(per_host)
 
     if top_risks_mode is None:
         if not aggregated_findings:
@@ -1237,10 +1409,20 @@ def global_summary_command(
         "--folder",
         help="Limit to scans in this folder (by folder name, case-insensitive).",
     ),
+    format: str = typer.Option(
+        "table",
+        "--format",
+        help="Output format: table or csv. CSV (severity stats) is written to stdout.",
+    ),
+    by_host: bool = typer.Option(
+        False,
+        "--by-host",
+        help="Add a per-host breakdown (per scan). Slower: fetches per-host data.",
+    ),
 ) -> None:
     """Show a summary of findings across all scans."""
 
-    global_summary(min_severity, top_risks, sort, limit, folder)
+    global_summary(min_severity, top_risks, sort, limit, folder, format, by_host)
 
 
 @global_app.command("finding", no_args_is_help=True)

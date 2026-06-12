@@ -18,7 +18,7 @@ Run `python3 main.py --help` for the current command list. Run any command with 
 - `scans`: list scans
 - `setup`: create or update `.env`
 - `status`: show context, environment, and next actions
-- `summary`: show severity summary and optional top-risk ranking
+- `summary`: show a severity-by-validation matrix, optional per-host breakdown, and top-risk ranking
 - `use`: select an active scan by name or ID
 - `use-history`: select a scan run for the active scan
 - `validate`: set validation state for a finding
@@ -59,5 +59,5 @@ Set a finding's state with `validate <id> --status <state>`. Filter any view (`f
 Formats:
 
 - tables: default for command views
-- `csv`: available for findings, diff, global findings, and report
-- `docx`: available for report
+- `csv`: available for findings, diff, summary, global findings, global summary, and report
+- `docx`: available for report and global report

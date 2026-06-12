@@ -24,14 +24,12 @@ python3 main.py global report --folder "Production"
 python3 main.py global summary
 ```
 
-The summary shows how many scans are available, how many latest usable runs were included, and severity counts across the aggregated findings.
+The summary shows how many scans are available, how many latest usable runs were included, and a severity-by-validation matrix across the aggregated findings (each severity broken down by Confirmed / False Positive / Unreviewed, with a `Total` column). Because a plugin can hold different validation states across scans, its estate status is treated as unreviewed if it is unreviewed in any included scan.
 
 Useful filters and ranking options:
 
 ```bash
 python3 main.py global summary --min-severity high
-python3 main.py global summary --top-risks severity
-python3 main.py global summary --top-risks volume
 python3 main.py global summary --top-risks weighted --limit 20
 ```
 
@@ -40,6 +38,16 @@ Top risk modes are:
 - `severity`: rank by severity first, then instance count.
 - `volume`: rank by total instances across scans.
 - `weighted`: rank by severity weight squared multiplied by instance count.
+
+Chart-ready CSV and per-host breakdown:
+
+```bash
+python3 main.py global summary --format csv > estate-stats.csv
+python3 main.py global summary --folder "Production" --format csv
+python3 main.py global summary --by-host --format csv > estate-by-host.csv
+```
+
+`--format csv` writes the matrix to stdout (`scope,severity,total,confirmed,false_positive,unreviewed`). `--by-host` adds a per (scan, host) breakdown — it fetches per-host data (about one lookup per finding per scan), so it is slower on large estates; use `--folder` to bound it. Progress is shown on stderr, so a redirected CSV stays clean.
 
 ## Findings
 

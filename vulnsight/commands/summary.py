@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import sys
 from typing import Any
 
 import requests
@@ -19,6 +21,7 @@ from vulnsight.commands.findings import (
 )
 from vulnsight.commands.scans import _build_client
 from vulnsight.context import load_context
+from vulnsight.validation import get_validation, get_validation_display
 
 
 console = Console()
@@ -146,6 +149,18 @@ def _aggregate_summary_findings(
     return aggregated_findings
 
 
+def _format_scope_hosts(scoped_hosts: set[str], limit: int = 12) -> str:
+    """Render the in-scope hosts as a readable, length-bounded list."""
+
+    hosts = sorted(scoped_hosts)
+    if not hosts:
+        return "None"
+    if len(hosts) <= limit:
+        return ", ".join(hosts)
+    shown = ", ".join(hosts[:limit])
+    return f"{shown} (+{len(hosts) - limit} more)"
+
+
 def _print_summary_header(
     scan_name: str,
     scan_id: int,
@@ -161,6 +176,7 @@ def _print_summary_header(
     console.print(f"Hosts in scan  : {len(all_hosts)}", highlight=False)
     console.print(f"Hosts in scope : {len(scoped_hosts)}", highlight=False)
     console.print(scope_label, highlight=False)
+    console.print(f"Hosts          : {_format_scope_hosts(scoped_hosts)}", highlight=False)
     console.print()
 
     if minimum_severity is not None:
@@ -169,20 +185,177 @@ def _print_summary_header(
         console.print()
 
 
-def _print_severity_counts(aggregated_findings: dict[int, dict[str, Any]]) -> None:
-    """Render per-severity counts for the current scope."""
+VALIDATION_ORDER = ("confirmed", "false_positive", "unreviewed")
 
-    severity_counts = {level: 0 for level in SEVERITY_LABELS}
+
+def _build_severity_validation_matrix(
+    aggregated_findings: dict[int, dict[str, Any]],
+    scan_id: int,
+    history_id: int,
+) -> dict[int, dict[str, int]]:
+    """Build per-severity totals broken down by validation status.
+
+    Returns a mapping of severity level to a row with a ``total`` plus a count
+    per validation status. The ``total`` preserves the raw severity metric.
+    """
+
+    matrix = {
+        level: {"total": 0, "confirmed": 0, "false_positive": 0, "unreviewed": 0}
+        for level in SEVERITY_LABELS
+    }
+
     for finding in aggregated_findings.values():
-        severity_level = int(finding["severity"])
-        if severity_level in severity_counts:
-            severity_counts[severity_level] += 1
+        level = int(finding["severity"])
+        if level not in matrix:
+            continue
+        status = str(
+            get_validation(scan_id, history_id, int(finding["plugin_id"])).get("status")
+            or "unreviewed"
+        )
+        row = matrix[level]
+        row["total"] += 1
+        row[status] = int(row.get(status, 0)) + 1
+
+    return matrix
+
+
+def _validate_summary_format(output_format: str) -> str:
+    """Validate the requested summary output format."""
+
+    value = str(output_format or "table").strip().lower()
+    if value not in {"table", "csv"}:
+        console.print("[red]Invalid format.[/red] Use one of: table, csv.")
+        raise typer.Exit(code=1)
+    return value
+
+
+def _write_summary_csv(
+    matrix: dict[int, dict[str, int]], scoped_hosts: set[str]
+) -> None:
+    """Write the severity-by-validation matrix as CSV to stdout (chart-ready).
+
+    A leading ``host`` column names the covered host when the scope is a single
+    host, otherwise ``ALL`` (use ``--by-host`` for per-host rows).
+    """
+
+    hosts = sorted(scoped_hosts)
+    host_value = hosts[0] if len(hosts) == 1 else "ALL"
+
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    writer.writerow(
+        ["host", "severity", "total", "confirmed", "false_positive", "unreviewed"]
+    )
+    for level in (4, 3, 2, 1, 0):
+        row = matrix[level]
+        writer.writerow(
+            [
+                host_value,
+                SEVERITY_LABELS[level],
+                int(row["total"]),
+                int(row["confirmed"]),
+                int(row["false_positive"]),
+                int(row["unreviewed"]),
+            ]
+        )
+
+
+def _print_severity_validation_matrix(matrix: dict[int, dict[str, int]]) -> None:
+    """Render the severity-by-validation matrix as a table."""
+
+    table = Table(box=box.ROUNDED)
+    table.add_column("Severity", no_wrap=True)
+    table.add_column("Total", justify="right", no_wrap=True)
+    for status in VALIDATION_ORDER:
+        table.add_column(get_validation_display(status), justify="right", no_wrap=True)
 
     for level in (4, 3, 2, 1, 0):
-        console.print(
-            f"{SEVERITY_LABELS[level]:<15}: {severity_counts[level]}",
-            highlight=False,
+        row = matrix[level]
+        table.add_row(
+            _format_severity(level),
+            str(row["total"]),
+            str(row["confirmed"]),
+            str(row["false_positive"]),
+            str(row["unreviewed"]),
         )
+
+    console.print(table)
+
+
+def _build_per_host_matrices(
+    aggregated_findings: dict[int, dict[str, Any]],
+    scoped_hosts: set[str],
+    scan_id: int,
+    history_id: int,
+) -> dict[str, dict[int, dict[str, int]]]:
+    """Build a severity-by-validation matrix per in-scope host.
+
+    A finding's validation status applies to every host it affects, so a finding
+    spanning multiple hosts is counted once per affected host.
+    """
+
+    matrices = {
+        host: {
+            level: {"total": 0, "confirmed": 0, "false_positive": 0, "unreviewed": 0}
+            for level in SEVERITY_LABELS
+        }
+        for host in scoped_hosts
+    }
+
+    for finding in aggregated_findings.values():
+        level = int(finding["severity"])
+        if level not in SEVERITY_LABELS:
+            continue
+        status = str(
+            get_validation(scan_id, history_id, int(finding["plugin_id"])).get("status")
+            or "unreviewed"
+        )
+        for host in finding.get("hosts", []):
+            host_matrix = matrices.get(host)
+            if host_matrix is None:
+                continue
+            row = host_matrix[level]
+            row["total"] += 1
+            row[status] = int(row.get(status, 0)) + 1
+
+    return matrices
+
+
+def _print_per_host_matrices(
+    matrices: dict[str, dict[int, dict[str, int]]]
+) -> None:
+    """Render a per-host severity-by-validation matrix for each in-scope host."""
+
+    console.print()
+    console.print("Per-Host Breakdown", highlight=False)
+    for host in sorted(matrices):
+        console.print()
+        console.print(f"Host: {host}", highlight=False)
+        _print_severity_validation_matrix(matrices[host])
+
+
+def _write_per_host_summary_csv(
+    matrices: dict[str, dict[int, dict[str, int]]]
+) -> None:
+    """Write per-host severity-by-validation rows as CSV to stdout."""
+
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    writer.writerow(
+        ["host", "severity", "total", "confirmed", "false_positive", "unreviewed"]
+    )
+    for host in sorted(matrices):
+        host_matrix = matrices[host]
+        for level in (4, 3, 2, 1, 0):
+            row = host_matrix[level]
+            writer.writerow(
+                [
+                    host,
+                    SEVERITY_LABELS[level],
+                    int(row["total"]),
+                    int(row["confirmed"]),
+                    int(row["false_positive"]),
+                    int(row["unreviewed"]),
+                ]
+            )
 
 
 def _get_top_risk_intro(mode: str) -> list[str]:
@@ -348,6 +521,8 @@ def show_summary(
     top_risks: str | None = None,
     sort: str = "desc",
     limit: int = 10,
+    format: str = "table",
+    by_host: bool = False,
 ) -> None:
     """Display a severity summary for the active scan context."""
 
@@ -364,6 +539,7 @@ def show_summary(
         return
 
     minimum_severity = _resolve_minimum_severity(min_severity)
+    resolved_format = _validate_summary_format(format)
     top_risks_mode = _validate_top_risks_mode(top_risks)
     sort_direction = _validate_sort_direction(sort)
     row_limit = _validate_limit(limit)
@@ -394,6 +570,18 @@ def show_summary(
         details.get("vulnerabilities", []),
     )
 
+    matrix = _build_severity_validation_matrix(aggregated_findings, scan_id, history_id)
+
+    if resolved_format == "csv":
+        if by_host:
+            per_host = _build_per_host_matrices(
+                aggregated_findings, scoped_hosts, scan_id, history_id
+            )
+            _write_per_host_summary_csv(per_host)
+        else:
+            _write_summary_csv(matrix, scoped_hosts)
+        return
+
     _print_summary_header(
         scan_name,
         scan_id,
@@ -402,7 +590,13 @@ def show_summary(
         scope_label,
         minimum_severity,
     )
-    _print_severity_counts(aggregated_findings)
+    _print_severity_validation_matrix(matrix)
+
+    if by_host:
+        per_host = _build_per_host_matrices(
+            aggregated_findings, scoped_hosts, scan_id, history_id
+        )
+        _print_per_host_matrices(per_host)
 
     if top_risks_mode is None:
         if not aggregated_findings:
