@@ -90,6 +90,17 @@ python3 main.py scans --folder "Production"
 python3 main.py global report --folder "Production" --format docx
 ```
 
+Filter findings and reports by severity and validation status (the default is
+everything; add flags to narrow). The same flags work on `findings`, `report`, and
+their `global` counterparts:
+
+```bash
+python3 main.py findings --min-severity high
+python3 main.py findings --only confirmed
+python3 main.py findings --exclude false_positive
+python3 main.py report --only confirmed --format docx
+```
+
 Use the built-in help for command-specific options:
 
 ```bash
